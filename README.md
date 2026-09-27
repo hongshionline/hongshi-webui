@@ -238,9 +238,9 @@ powershell -File scripts\build.ps1 -Release -Platform macos-arm64,macos-amd64 `
 
 or a CI job on `macos-latest`, which is what `hongshi/.github/workflows/release.yml` already does for
 the kernel — that workflow's own comment says it: *"macOS is built here rather than locally because
-Apple Silicon requires a code signature, and only a macOS linker produces one."* The shell has no CI
-of its own yet because it is not in a repository; `Cargo.toml` already points at `hongshionline/hongshi2`,
-which is where it would go.
+Apple Silicon requires a code signature, and only a macOS linker produces one."* The shell now has a
+repository of its own, [`hongshionline/hongshi-webui`](https://github.com/hongshionline/hongshi-webui),
+which is where that job would go; `Cargo.toml` points at it.
 
 `Get-BinaryKind` in `build.ps1` understands Mach-O as well as PE and ELF, so an Apple artifact is
 checked the same way the others are: magic `CF FA ED FE`, then the CPU type (`0x01000007` for x86_64,
