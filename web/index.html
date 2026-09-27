@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>红石联机 · 客户端</title>
+<!-- The tab's own mark. Without it the browser asks for `/favicon.ico`, which the
+     shell answers 204 — a tab with a blank page icon next to every other tab. -->
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="main.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <!-- ------------------------------------------------------------- sidebar -->
+  <aside class="side" id="side">
+    <div class="side-head">
+      <span class="brand" id="brand" role="img" aria-label="红石联机"></span>
+      <span class="side-brand">
+        <b>红石联机</b>
+        <i>Redstone Online2</i>
+      </span>
+      <button type="button" class="side-toggle" id="side-toggle"
+              aria-label="收起侧栏" aria-expanded="true" aria-controls="side-nav">
+        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-panel"></use></svg>
+      </button>
+    </div>
+
+    <nav class="side-nav" id="side-nav" aria-label="主导航">
+      <a class="nav-item" href="/" data-page="home">
+        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-home"></use></svg>
+        <span class="nav-text">主页</span>
+      </a>
+      <a class="nav-item" href="/connect" data-page="connect">
+        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-link"></use></svg>
+        <span class="nav-text">联机</span>
+      </a>
+      <a class="nav-item nav-item--soon" href="/cloud" data-page="cloud" aria-disabled="true">
+        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-cloud"></use></svg>
+        <span class="nav-text">云存档</span>
+        <span class="nav-badge">待开放</span>
+      </a>
+      <a class="nav-item nav-item--soon" href="/hosting" data-page="hosting" aria-disabled="true">
+        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-server"></use></svg>
+        <span class="nav-text">租聘服</span>
+        <span class="nav-badge">待开放</span>
+      </a>
+      <a class="nav-item nav-item--soon" href="/together" data-page="together" aria-disabled="true">
+        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-people"></use></svg>
+        <span class="nav-text">一起玩</span>
+        <span class="nav-badge">待开放</span>
+      </a>
+      <a class="nav-item" href="/settings" data-page="settings">
+        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-setting"></use></svg>
+        <span class="nav-text">设置</span>
+      </a>
+    </nav>
+
+    <div class="side-foot">
+      <!-- Collapsed, this is just the status dot; expanded it carries the words.
+           A dot with no label still says something on a rail, which is the point. -->
+      <span class="pill" id="link-state" data-state="pending" title="正在连接">
+        <span class="pill-dot"></span><span class="pill-text" id="link-text">连接中…</span>
+      </span>
+      <button type="button" class="side-quit" id="action-quit" title="退出客户端">
+        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-power"></use></svg>
+        <span class="nav-text">退出客户端</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ---------------------------------------------------------------- main -->
+  <main class="main" id="main" tabindex="-1">
+    <!-- The log panel's switch. It is here rather than inside `.page` because the
+         router empties that element on every navigation, and rather than in the
+         drawer because a control that disappears with the thing it opens is no use
+         when the thing is open. Opposite corner, same shape as the sidebar's. -->
+    <button type="button" class="panel-toggle" id="log-toggle"
+            aria-label="展开日志" aria-expanded="false" aria-controls="drawer" title="日志">
+      <svg class="icon" aria-hidden="true"><use href="icons.svg#i-console"></use></svg>
+    </button>
+    <div class="page" id="page" aria-live="polite"></div>
+  </main>
+</div>
+
+<!-- Log panel: a drawer on wide screens, full width when the window is narrow.
+     Outside the page container so switching pages does not destroy a running
+     tunnel's log.
+
+     There is no close button in the header, on purpose: the switch at the top of the
+     board is already there whether this panel is open or shut, and two controls doing
+     the same thing a few pixels apart read as one control that is broken. The broom
+     stays, because clearing is a different action from closing. -->
+<section class="drawer" id="drawer" hidden aria-label="隧道日志">
+  <header class="drawer-head">
+    <h2>隧道日志</h2>    <div class="drawer-tools">
+      <button type="button" class="icon-btn" id="drawer-clear" title="清空日志" aria-label="清空日志">
+        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-broom"></use></svg>
+      </button>
+    </div>
+  </header>
+  <div class="term" id="term" role="log" aria-live="polite" tabindex="0"></div>
+</section>
+
+<p class="toast" id="toast" role="status" aria-live="polite" hidden></p>
+
+<script src="app.js"></script>
+<script src="pages.js"></script>
+</body>
+</html>

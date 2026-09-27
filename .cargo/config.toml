@@ -1,0 +1,31 @@
+# crates.io through the USTC mirror, like `hongshi/.cargo/config.toml`.
+#
+# This is not optional politeness: this machine's global CARGO_HOME config
+# (`D:\axlmc\axolotl_clone\.cargo\config.toml`) replaces crates-io with a
+# `vendored-sources` directory that belongs to a different project. Without the
+# override below, anything this crate adds as a dependency would be resolved
+# against that unrelated vendor tree.
+#
+# Today the shell has zero dependencies, so this file changes nothing about the
+# build. It is here so that the first dependency added does not have to debug it.
+
+[source.crates-io]
+replace-with = 'ustc'
+
+[source.ustc]
+registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+
+# Linux cross-compilation (static musl, runs on any distribution), the same setup
+# `hongshi/.cargo/config.toml` uses. rust-lld ships with the toolchain and rustc looks
+# it up in the sysroot itself, so it does not need to be on PATH, and neither Docker
+# nor WSL nor zig is required.
+#
+# The shell needs this because the download page offers the WebUI for linux-amd64 as
+# well as windows-amd64, and the site only serves what has actually been built.
+# `scripts/build.ps1` installs the missing `rust-std` into the sysroot first —
+# `rustup target add` does not work on this toolchain, which came from a v1 manifest.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"

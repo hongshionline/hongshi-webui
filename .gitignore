@@ -1,0 +1,14 @@
+# The build directory. 937 MB on the machine this was prepared on, and nothing in it is
+# source.
+/target/
+
+# The kernel is **a separate download that ships on the same page as this shell** — it is
+# not part of it, and this crate does not link it. What ends up here is either what
+# `scripts/build.ps1` copied in to make a local run work, or what a user dropped in by
+# hand. Neither is an input to the build, and publishing a kernel binary inside the
+# shell's repository would say the two are one thing, which is the opposite of the design.
+/core/
+
+# Local run output: the settings file is written next to the executable, and these are
+# the two places the shell looks.
+hongshi.settings.json

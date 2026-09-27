@@ -1,0 +1,1001 @@
+/*
+ * hongshi shell — the design system.
+ *
+ * Same world as the site (HongshiMain/DESIGN.md): three greys are three heights of
+ * one board, red #CA3E47 is the signal and never text, white is the only text
+ * colour and it retreats by opacity, pill controls, one shadow in the whole shell.
+ *
+ * The terminal is the single deliberate exception: it is a different object on the
+ * board (a screen), so it brings its own palette from hongshi/demo/terminal.html
+ * and keeps it scoped to itself.
+ */
+
+/*
+ * Nunito, Latin subset, variable 400-700, 38 KB, SIL OFL 1.1 (fonts/OFL-Nunito.txt).
+ *
+ * Latin only, and that is the point: it never has to be re-cut when the copy changes,
+ * and the browser falls through per glyph, so a Chinese character simply picks the
+ * next family that has it.
+ */
+@font-face {
+  font-family: "Nunito";
+  src: url("fonts/nunito-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * Resource Han Rounded — a rounded CJK face, SIL OFL 1.1
+ * (fonts/OFL-ResourceHanRounded.txt), subset by scripts/build-cjk-subset.py.
+ *
+ * The full face is 14 MB per weight, so these are cut down to what this client can
+ * actually display. The two weights carry different character sets, which is a
+ * deliberate split rather than an oversight:
+ *
+ *   Regular (612 KB)  every character in `web/` and `src/`, plus the 3755 common
+ *                     characters — because 每日资讯 headlines come from the server
+ *                     and a headline that fell back to a system face mid-sentence
+ *                     would undo the point of bundling this at all.
+ *   Bold (97 KB)      only the characters the client itself writes, which is the only
+ *                     Chinese this interface ever renders at 600 or above.
+ *
+ * Re-cut after changing any user-visible string:
+ *   python scripts/build-cjk-subset.py --regular <RHR-Regular.ttf> --bold <RHR-Bold.ttf>
+ *
+ * `font-display: swap` throughout: the system face shows immediately and the rounded
+ * one takes over when it arrives, so nothing is ever invisible while a 700 KB font
+ * loads from loopback.
+ */
+@font-face {
+  font-family: "Han Rounded";
+  src: url("fonts/han-rounded-regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Han Rounded";
+  src: url("fonts/han-rounded-bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* three heights of one board */
+  --ground: #313131;
+  --plate: #414141;
+  --rule: #525252;
+
+  /* the signal: graphics and button fills only, never text */
+  --red: #ca3e47;
+
+  /* text, one colour, retreating by opacity */
+  --fg: #ffffff;
+  --fg-soft: rgba(255, 255, 255, 0.60);
+  --fg-dim: rgba(255, 255, 255, 0.55);
+  --edge: rgba(255, 255, 255, 0.42);
+
+  /* the terminal screen, from the demo */
+  --screen: #05070a;
+  --screen-surface: #0e141a;
+  --screen-line: #232e39;
+  --term-fg: #c2cedb;
+  --term-live: #5fd0c4;
+  --term-ident: #7aa2f7;
+  --term-literal: #e5b567;
+  --term-reach: #8fd694;
+  --term-fail: #f07178;
+
+  /* latency, the four states the node list shows */
+  --ok: #8fd694;
+  --warn: #e5b567;
+  --high: #f07178;
+  --dead: #6c7379;
+
+  /* Nunito for Latin and digits, Han Rounded for Chinese — both bundled, because the
+     faces that ship with Windows are not round and a rounded Latin face paired with a
+     neutral Chinese one is a mismatch you can see on every line of the interface. The
+     system stack stays behind them for the characters the subsets do not carry: a
+     headline longer than the common set still renders, in a system face, rather than
+     as tofu. */
+  --font-sans: "Nunito", "Han Rounded", "DengXian", "PingFang SC",
+    "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", system-ui,
+    -apple-system, "Noto Sans CJK SC", sans-serif;
+  /* "Han Rounded" sits *before* the generic `monospace` on purpose. None of the
+     monospace faces above it carries a CJK glyph, so every Chinese character in a
+     mono slot used to fall all the way through to whatever the system calls
+     等宽/宋体 — which is how 服务 · 联机隧道's "当前没有隧道" ended up as the only
+     text in the interface in a non-rounded face. Latin and digits still take the
+     real monospace faces, because those come first and per-glyph fallback stops at
+     the first family that has the character. */
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas,
+    "Liberation Mono", "Han Rounded", monospace;
+
+  --side-w: 232px;
+  --side-w-collapsed: 68px;
+  --drawer-w: 420px;
+  --topbar-h: 56px;
+
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-rise: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  font-weight: 400;
+  overflow-x: hidden;
+}
+
+::selection { background: var(--red); color: var(--fg); }
+
+:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+* { scrollbar-width: thin; scrollbar-color: var(--edge) var(--ground); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--ground); }
+::-webkit-scrollbar-thumb {
+  background: var(--edge);
+  border: 3px solid var(--ground);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.6); }
+
+h1, h2, h3 { font-weight: 400; letter-spacing: -0.01em; margin: 0; }
+
+code, kbd, samp { font-family: var(--font-mono); font-size: 0.94em; }
+
+a { color: var(--fg); }
+
+/* ------------------------------------------------------------------- icons */
+
+.icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: block;
+}
+
+.icon--sm { width: 16px; height: 16px; }
+.icon--lg { width: 24px; height: 24px; }
+
+/* -------------------------------------------------------------------- app */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--side-w) minmax(0, 1fr);
+  min-height: 100vh;
+  transition: grid-template-columns 0.22s var(--ease);
+}
+
+.app[data-side="collapsed"] { grid-template-columns: var(--side-w-collapsed) minmax(0, 1fr); }
+
+/* ------------------------------------------------------------------ side */
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--ground);
+  border-right: 1px solid var(--rule);
+  padding: 14px 12px 16px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  /* Explicit instead of implied by the grid column: the collapsed rail has to be
+     able to override this, and a bare `.side` rule otherwise wins on specificity
+     against `.app[data-side="collapsed"] .side`. */
+  width: var(--side-w);
+  transition: width 0.22s var(--ease);
+}
+
+.side-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 4px;
+}
+
+.brand {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  flex: none;
+  /* The 128px redstone block from the site's own artwork, downsampled — no
+     `image-rendering: pixelated`, which is for blowing a sprite up.
+     The reference used to be split in two: this plain URL as a fallback, behind a
+     `--icon-url` that app.js overwrote with a tokenized one. With no session token
+     there is nothing to overwrite it with, so there is one URL again. */
+  background-image: url("icon.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.side-brand {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  white-space: nowrap;
+  transition: opacity 0.16s var(--ease);
+}
+
+.side-brand b { font-size: 14px; font-weight: 500; }
+.side-brand i {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--fg-soft);
+  letter-spacing: 0.02em;
+}
+
+.side-toggle {
+  margin-left: auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--fg-soft);
+  cursor: pointer;
+  transition: background-color 0.18s var(--ease), color 0.18s var(--ease),
+    border-color 0.18s var(--ease);
+}
+
+.side-toggle:hover { background: var(--plate); color: var(--fg); border-color: var(--edge); }
+
+/* The log panel's switch, in the opposite corner and wearing the sidebar's shape, so
+   the two read as the same kind of control. It sits outside `.page` (the router
+   empties that element on every navigation) and outside the drawer (a control that
+   vanishes with the thing it opens is no use once the thing is open).
+
+   It does not move. It used to slide left by `--drawer-w` when the drawer opened, so
+   that it stayed in the *board's* corner — which meant the control you press to shut
+   the panel ran away from the corner you were looking at, and on a narrow window it
+   did not move at all, so the same button behaved two ways. It is pinned to the
+   window's top-right for both states now, and when the drawer is open it simply sits
+   on top of it; `.drawer-head` reserves the width instead. */
+.panel-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 35;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: var(--ground);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--fg-soft);
+  cursor: pointer;
+  transition: background-color 0.18s var(--ease), color 0.18s var(--ease),
+    border-color 0.18s var(--ease);
+}
+
+.panel-toggle:hover { background: var(--plate); color: var(--fg); border-color: var(--edge); }
+
+/* Open, the switch is lit: the red is the design system's signal colour and this is a
+   state, not decoration. */
+.panel-toggle[aria-expanded="true"] { color: var(--red); border-color: var(--red); }
+
+.side-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: var(--fg-soft);
+  text-decoration: none;
+  white-space: nowrap;
+  position: relative;
+  transition: background-color 0.16s var(--ease), color 0.16s var(--ease);
+}
+
+.nav-item:hover { background: var(--plate); color: var(--fg); }
+
+/* Current page: white text plus the red bar. One state language, two levels —
+   full for current, half for hover — the same as the site's nav. */
+.nav-item[aria-current="page"] { color: var(--fg); }
+
+.nav-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 20px;
+  border-radius: 1px;
+  background: var(--red);
+}
+
+.nav-item--soon { color: var(--fg-dim); }
+.nav-item--soon:hover { background: transparent; color: var(--fg-dim); }
+
+.nav-text { font-size: 14px; }
+
+.nav-badge {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-dim);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 17px;
+}
+
+.side-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.side-quit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--fg-soft);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.18s var(--ease), color 0.18s var(--ease);
+}
+
+.side-quit:hover { border-color: var(--edge); color: var(--fg); }
+.side-quit:disabled { color: var(--fg-dim); cursor: not-allowed; }
+
+/* ------------------------------------------------------------- collapsed */
+
+/* Narrow rail: icons only, labels gone, the toggle stays reachable. */
+.app[data-side="collapsed"] .side-brand,
+.app[data-side="collapsed"] .nav-text,
+.app[data-side="collapsed"] .nav-badge { display: none; }
+
+.app[data-side="collapsed"] .side {
+  width: var(--side-w-collapsed);
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.app[data-side="collapsed"] .side-head { justify-content: center; }
+.app[data-side="collapsed"] .brand { display: none; }
+.app[data-side="collapsed"] .side-toggle { margin-left: 0; }
+.app[data-side="collapsed"] .nav-item { justify-content: center; padding: 0; }
+.app[data-side="collapsed"] .nav-item[aria-current="page"]::before {
+  left: -8px;
+  height: 24px;
+}
+.app[data-side="collapsed"] .side-quit { justify-content: center; padding: 0; }
+.app[data-side="collapsed"] .side-foot .pill { justify-content: center; }
+.app[data-side="collapsed"] .pill-text { display: none; }
+
+/* ------------------------------------------------------------------- main */
+
+.main {
+  min-width: 0;
+  padding: 30px clamp(20px, 4vw, 44px) 56px;
+}
+
+.main:focus { outline: none; }
+
+/* ------------------------------------------------------------- page change */
+
+/* Every page is rebuilt from scratch, so without this the board cuts from one page
+   to the next. The animation lives on a class the router re-adds on every
+   navigation (see `show()` in app.js), *not* on `.page` itself — an animation
+   declared on the element runs once, on page load, and every later switch was a
+   hard cut. Blur rather than a slide: the thing being expressed is "this is a
+   different board", not "this board moved". */
+.page {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.page--enter {
+  animation: page-in 0.34s var(--ease-rise) both;
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    filter: blur(7px);
+    transform: translateY(7px) scale(0.994);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page--enter { animation: none; }
+}
+
+.page-head { margin-bottom: 22px; }
+
+.page-title {
+  font-size: clamp(24px, 2.6vw, 34px);
+  font-weight: 300;
+  line-height: 1.2;
+  letter-spacing: -0.022em;
+}
+
+.page-sub {
+  margin: 8px 0 0;
+  max-width: 62ch;
+  font-size: 14px;
+  color: var(--fg-soft);
+}
+
+/* A page is a column of sections. Sections that draw a grid (the usage cards, the
+   tunnel summary, the news strip) fill it; a section whose content is mostly prose
+   or a list of key/values would otherwise stretch until it hits the window, and
+   the cards next to it would look arbitrarily narrower. */
+.page > .section { width: 100%; }
+
+.section { margin-top: 30px; }
+
+/* The first section on a page is already separated by the page head's own margin. */
+.section--first { margin-top: 0; }
+
+/* A section heading is an *indicator plus a label*, and the label is what has to
+   sit on the content's left edge — the same edge as the h1, the paragraphs and the
+   cards under it. Two earlier attempts got this wrong in the same way: they let the
+   indicator take part in the layout, so the label was pushed 30px right and the
+   whole column read as crooked. (The very first one also reserved that 30px through
+   a `padding-left` shared with labels that had no indicator at all, which is the
+   "text style borrowed from something with an indicator" trap.)
+   So the indicator is taken out of the flow entirely and hung in the page's own
+   44px gutter, which is wide enough for it on any screen where the gutter exists. */
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.4;
+  margin: 0 0 12px;
+}
+
+.section-title > svg {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--fg-soft);
+  /* Optically centred on the text rather than on its box: a 20px icon against a
+     15px cap height reads as sitting high. */
+  transform: translateY(1px);
+}
+
+/* Below this the gutter is 16px and an outdented icon would fall off the page, so
+   the indicator goes back into the flow and the label gives up the 30px. Crooked
+   beats clipped. */
+@media (min-width: 861px) {
+  .section-title {
+    margin-left: -30px;
+    padding-left: 30px;
+  }
+
+  .section-title > svg {
+    position: absolute;
+    margin-left: -30px;
+  }
+}
+
+/* A title with a trailing action needs the room; without one the heading would
+   stretch the full width and push the button off the right edge. */
+.section-title > .btn { margin-left: auto; }
+
+.section-title > .pill { margin-left: auto; }
+
+.section-note {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--fg-dim);
+  max-width: 72ch;
+}
+
+/* ------------------------------------------------------------------ cards */
+
+.card {
+  background: var(--plate);
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  padding: 18px 20px;
+}
+
+.card--flat { background: transparent; }
+
+.card + .card { margin-top: 12px; }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.card-head h3 { font-size: 14.5px; font-weight: 500; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  font-size: 12.5px;
+  color: var(--fg-soft);
+  white-space: nowrap;
+}
+
+.pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-soft);
+  flex: none;
+}
+
+.pill[data-state="ok"] { color: var(--fg); border-color: var(--edge); }
+.pill[data-state="ok"] .pill-dot { background: var(--ok); }
+.pill[data-state="down"] { color: var(--fg); border-color: var(--edge); }
+.pill[data-state="down"] .pill-dot { background: var(--dead); }
+.pill[data-state="busy"] .pill-dot { background: var(--warn); }
+
+/* -------------------------------------------------------------- elements */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 20px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font: 400 14.5px/1 var(--font-sans);
+  color: var(--fg);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 0.2s var(--ease), border-color 0.2s var(--ease),
+    transform 0.2s var(--ease), color 0.2s var(--ease);
+}
+
+.btn--primary { background: var(--red); }
+
+.btn--primary:hover:not(:disabled) {
+  border-color: var(--edge);
+  transform: translateY(-1px);
+}
+
+.btn--ghost { border-color: var(--edge); }
+
+.btn--ghost:hover:not(:disabled) { background: var(--plate); border-color: var(--fg); }
+
+.btn--danger { border-color: var(--edge); color: var(--fg); }
+
+.btn--danger:hover:not(:disabled) { background: var(--plate); border-color: var(--fg); }
+
+.btn:disabled {
+  cursor: not-allowed;
+  color: var(--fg-dim);
+  background: transparent;
+  border-color: var(--rule);
+  transform: none;
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--fg-soft);
+  cursor: pointer;
+  transition: color 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+
+.icon-btn:hover { color: var(--fg); border-color: var(--edge); }
+
+.label {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-soft);
+  margin-bottom: 6px;
+}
+
+.input {
+  width: 100%;
+  height: 44px;
+  padding: 0 16px;
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  color: var(--fg);
+  /*
+   * `line-height: 1` centres the glyph *box* in the 44px pill, which is not the
+   * same as centring the text: every font puts more descender space below the
+   * baseline than the eye reads as empty, so a single line in an exactly-tall box
+   * looks low. A little leading gives the line box something to distribute and
+   * the text lands in the middle.
+   */
+  font: 400 15px/1.25 var(--font-sans);
+  transition: border-color 0.18s var(--ease), background-color 0.18s var(--ease);
+}
+
+.input:hover { border-color: var(--fg); }
+
+.input:focus {
+  outline: none;
+  background: var(--plate);
+  border-color: var(--fg);
+}
+
+.input--mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.input--box { border-radius: 12px; height: auto; padding: 10px 14px; }
+
+.field { min-width: 0; }
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 14px;
+}
+
+/* Segmented picker: two levels (kind, then protocol). Radio inputs, so keyboard
+   and screen readers work without any of this being scripted. */
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.segmented label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  font-size: 13.5px;
+  color: var(--fg-soft);
+  cursor: pointer;
+  transition: border-color 0.16s var(--ease), color 0.16s var(--ease),
+    background-color 0.16s var(--ease);
+}
+
+.segmented label:hover { border-color: var(--fg); color: var(--fg); }
+
+.segmented input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.segmented input:checked + span { color: var(--fg); }
+
+.segmented label:has(input:checked) {
+  background: var(--plate);
+  border-color: var(--fg);
+  color: var(--fg);
+}
+
+.segmented label:has(input:focus-visible) { outline: 2px solid var(--fg); outline-offset: 2px; }
+
+.segmented label[data-disabled="true"] {
+  color: var(--fg-dim);
+  border-style: dashed;
+  border-color: var(--rule);
+  cursor: not-allowed;
+}
+
+.segmented label[data-disabled="true"]:hover { border-color: var(--rule); color: var(--fg-dim); }
+
+.seg-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+/* ------------------------------------------------------------------ lists */
+
+.rows { display: flex; flex-direction: column; }
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.row:last-child { border-bottom: 1px solid var(--rule); }
+
+.row-main { min-width: 0; flex: 1; }
+
+.row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.row-sub {
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-soft);
+  overflow-wrap: anywhere;
+}
+
+.row-tail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  color: var(--fg-soft);
+  white-space: nowrap;
+}
+
+.empty {
+  padding: 18px 0;
+  font-size: 13.5px;
+  color: var(--fg-soft);
+}
+
+.empty--box {
+  border: 1px dashed var(--rule);
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 12px;
+}
+
+/* Latency dot: the state is colour *and* text, so it survives a colour-blind eye. */
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--dead);
+}
+
+.dot[data-latency="low"] { background: var(--ok); }
+.dot[data-latency="mid"] { background: var(--warn); }
+.dot[data-latency="high"] { background: var(--high); }
+.dot[data-latency="dead"] { background: var(--dead); }
+.dot[data-latency="unknown"] { background: var(--rule); }
+/* Reachable but its control port is closed: amber, because it is neither a
+   failure of the user's network nor a node they can use. */
+.dot[data-latency="ping"] { background: var(--warn); }
+
+/* --------------------------------------------------------------- notices */
+
+.notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--fg-soft);
+  background: transparent;
+}
+
+.notice .icon { margin-top: 2px; color: var(--fg-soft); }
+.notice strong { color: var(--fg); font-weight: 500; }
+
+.notice--warn { border-color: var(--edge); color: var(--fg); }
+.notice--warn .icon { color: var(--fg); }
+
+/* ------------------------------------------------------------------ toast */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: min(560px, calc(100vw - 40px));
+  padding: 12px 18px;
+  background: var(--plate);
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  font-size: 13.5px;
+  color: var(--fg);
+  z-index: 40;
+  animation: toast-in 0.22s var(--ease-rise);
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+}
+
+/* ------------------------------------------------------------------ drawer */
+
+/* The log panel is the same board as everything else, not a black slab bolted to
+   the side: the terminal's own palette stays for the *text*, but the surface is
+   the page background so the two halves read as one window. */
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(var(--drawer-w), 100vw);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground);
+  border-left: 1px solid var(--rule);
+  z-index: 30;
+  animation: drawer-in 0.24s var(--ease-rise);
+}
+
+/* A hidden drawer must actually be gone. `display: flex` above would otherwise
+   win over the `hidden` attribute's `display: none`, which is how an empty black
+   panel ends up parked over the page on load. */
+.drawer[hidden] { display: none; }
+
+@keyframes drawer-in {
+  from { transform: translateX(16px); opacity: 0; }
+}
+
+/* The switch is 34px at `right: 16px` with z-index 35, so the header keeps 60px clear
+   on its right for it — otherwise the broom button ends up underneath. The reservation
+   is unconditional because the drawer is a *sibling* of `.app`, not a descendant, so
+   `.app[data-drawer="open"] .drawer-head` matches nothing; a header that is not shown
+   costs nothing anyway. */
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 60px 14px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.drawer-head h2 {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg);
+  margin-right: auto;
+}
+
+.drawer-tools { display: flex; gap: 4px; }
+
+.drawer .icon-btn { color: var(--fg-soft); }
+.drawer .icon-btn:hover { border-color: var(--edge); color: var(--fg); }
+
+/* An open drawer takes its own room from the board rather than covering it.
+ *
+ * This used to reserve `--drawer-w - --side-w` at every width — 188px against a
+ * 420px panel — which left the panel sitting on top of the right-hand 188px of the
+ * board at all times. On 联机 that is the end of the tunnel card's address row and
+ * the latency column of the node table, and it reads as the card being partly
+ * hidden behind the log. Reserve the whole panel, and fall back to a sheet over the
+ * content only when the window is too small for both. */
+.app[data-drawer="open"] { padding-right: var(--drawer-w); }
+
+@media (max-width: 1080px) {
+  .app[data-drawer="open"] { padding-right: 0; }
+}
+
+/* --------------------------------------------------------------- terminal */
+
+.term {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 20px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.62;
+  color: var(--fg-soft);
+  background: var(--ground);
+  overflow-wrap: anywhere;
+}
+
+.term:focus { outline: none; }
+
+.term-line { display: flex; gap: 10px; }
+
+.term-time {
+  color: var(--fg-dim);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.term-body { min-width: 0; white-space: pre-wrap; }
+
+/* Levels are told apart by brightness first and hue second, so the panel still
+   reads on the board's greys. */
+.term-line[data-level="info"] .term-body { color: var(--fg-soft); }
+.term-line[data-level="live"] .term-body { color: var(--term-live); }
+.term-line[data-level="ok"] .term-body { color: var(--term-reach); }
+.term-line[data-level="warn"] .term-body { color: var(--term-literal); }
+.term-line[data-level="error"] .term-body { color: var(--term-fail); }
+.term-line[data-level="ident"] .term-body { color: var(--term-ident); }
+.term-line[data-level="dim"] .term-body { color: var(--fg-dim); }
+/* The kernel's own words. Its own tone, so a reader can tell at a glance which lines
+   came from hongshic and which are the client talking about it. */
+.term-line[data-level="kernel"] .term-body { color: var(--term-live); }
+
+/* ---------------------------------------------------------------- responsive */
+
+@media (max-width: 1100px) {
+  :root { --drawer-w: 360px; }
+}
+
+@media (max-width: 860px) {
+  /* The rail is the only shape that fits: the sidebar keeps its icons and the
+     drawer becomes a full-width sheet over the board. */
+  .app,
+  .app[data-side="collapsed"] { grid-template-columns: var(--side-w-collapsed) minmax(0, 1fr); }
+
+  .app[data-drawer="open"] { padding-right: 0; }
+
+  .drawer { width: 100vw; border-left: none; }
+
+  .main { padding: 22px 16px 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

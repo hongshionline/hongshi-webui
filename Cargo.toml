@@ -1,0 +1,29 @@
+[package]
+name = "hongshi-shell"
+version = "0.4.0"
+edition = "2024"
+description = "Official WebUI shell for the hongshi kernel: a local server plus your own browser"
+repository = "https://github.com/HongshiOnline/hongshi2"
+autobins = false
+
+# The shell ships to user machines, so binary size matters for the same reason it
+# does in the kernel. There are deliberately no dependencies at all: the HTTP
+# server below is ~300 lines over std::net because it only ever serves loopback.
+[dependencies]
+
+[lib]
+name = "hongshi_shell"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hongshi"
+path = "src/main.rs"
+
+# Mirrors the kernel's release profile. `panic = "abort"` is omitted: it would
+# turn a panic in one connection handler into a dead shell, and the whole point of
+# the accept loop is that one bad client cannot take the process down.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

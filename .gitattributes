@@ -1,0 +1,15 @@
+# Line endings. `text=auto` stores LF in the repository and hands back whatever the
+# platform uses, which is what keeps a Windows checkout and a Linux one from showing
+# every file as modified.
+* text=auto
+
+*.ps1 text eol=crlf
+*.sh  text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# The interface ships three fonts and an icon; the sprite is markup and stays text.
+*.woff2 binary
+*.png   binary
+*.ico   binary
+*.ttf   binary

@@ -1,0 +1,662 @@
+/*
+ * hongshi shell — page components.
+ *
+ * Split from main.css only by subject, not by rule: the tokens, greys, red and
+ * text opacities all come from there. Nothing here invents a colour.
+ */
+
+/* ------------------------------------------------------ daily news strip */
+
+/* A grid, not a scroll strip: the section is meant to fill its width, and cards
+   that scroll sideways never look full. Two to four columns depending on room. */
+.news {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr));
+  gap: 12px;
+}
+
+.news-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px 18px;
+  background: var(--plate);
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.news-card:hover { border-color: var(--edge); }
+
+/* The image leads the card and runs to its edges — the padding comes off the
+   card and goes onto the body instead, which is the only way a full-bleed media
+   card works without a wrapper element. */
+.news-card--media { padding: 0; }
+
+.news-card--media .news-card-body { padding: 0 18px; }
+
+.news-card--media .news-foot { padding: 0 18px 16px; }
+
+.news-media {
+  aspect-ratio: 16 / 9;
+  background: var(--ground);
+  border-bottom: 1px solid var(--rule);
+  overflow: hidden;
+}
+
+.news-media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.news-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.news-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-soft);
+  letter-spacing: 0.02em;
+}
+
+.news-tag::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--red);
+}
+
+.news-title {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.45;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.news-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.62;
+  color: var(--fg-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.news-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+}
+
+/* The date on the left, the article on the right. `margin-left: auto` rather than
+   `space-between`, so a card with no link keeps its date where every other card's
+   date is. */
+.news-when {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.news-link {
+  margin-left: auto;
+  color: var(--fg-soft);
+  text-decoration: none;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 1px;
+}
+
+.news-link:hover { color: var(--fg); border-bottom-color: var(--edge); }
+
+.news-card--state {
+  grid-column: 1 / -1;
+  justify-content: center;
+  text-align: left;
+  border-style: dashed;
+  min-height: 148px;
+}
+
+.news-card--state .news-title { color: var(--fg); }
+
+/* ---------------------------------------------------------- usage meters */
+
+.usage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 12px;
+}
+
+.usage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  background: var(--plate);
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+}
+
+.usage-card[data-available="false"] { background: transparent; }
+
+/* The live tunnel card is the one that carries a filled plate: it is the card with
+   something actually running behind it. */
+.usage-card--live { border-color: var(--edge); }
+
+.usage-card--live .usage-lines {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.usage-state--live { color: var(--fg); }
+.usage-state--live .icon { color: var(--ok); }
+
+/* ------------------------------------------------------------------ about */
+
+.about-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.about-name { font-size: 15px; font-weight: 500; }
+
+.about-version {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--fg-soft);
+}
+
+.usage-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.usage-top .icon { color: var(--fg-soft); }
+
+.usage-name { font-size: 14px; font-weight: 500; }
+
+.usage-state {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-soft);
+}
+
+.usage-state .icon { color: var(--fg-dim); }
+
+/* The unavailable mark: a cross, not red — red is the signal, not a status. */
+.usage-card[data-available="false"] .usage-state { color: var(--fg-dim); }
+
+.usage-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 22px;
+  color: var(--fg);
+}
+
+.usage-card[data-available="false"] .usage-value { color: var(--fg-soft); font-size: 15px; }
+
+.meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ground);
+  border: 1px solid var(--rule);
+  overflow: hidden;
+}
+
+.meter > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--red);
+  transition: width 0.4s var(--ease);
+}
+
+.usage-note {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--fg-soft);
+  margin: 0;
+}
+
+.usage-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.usage-lines b {
+  color: var(--fg-soft);
+  font-weight: 400;
+}
+
+/* ------------------------------------------------------------- node list */
+
+/*
+ * The 联机 board is one column at every width — `.connect-grid` has no grid rules,
+ * so the form, the node list and the tunnel card simply stack. That makes the tunnel
+ * card the last block on the page, sitting directly under the node section's note,
+ * which read as it being crammed against the list above it. The gap is what gives it
+ * its own footing.
+ */
+.connect-side { margin-top: 30px; }
+
+/* The relay picker: a button that opens a list of rows.
+   It is a listbox rather than a `<select>` because a `<select>` cannot be styled —
+   the popup is drawn by the OS, so a rounded, name-left/latency-right row is not
+   something an `<option>` can be asked for. The open list follows the toast's
+   elevation language: a `--plate` surface, a `--rule` border, 16px corners, and no
+   shadow, because the design system has exactly one of those and it is not this. */
+.node-box { margin-top: 12px; }
+
+.picker { position: relative; }
+
+.picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 18px 8px 16px;
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  color: var(--fg);
+  font: 400 15px/1.25 var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s var(--ease), background-color 0.18s var(--ease);
+}
+
+.picker-trigger:hover { border-color: var(--fg); }
+
+.picker-trigger:focus {
+  outline: none;
+  background: var(--plate);
+  border-color: var(--fg);
+}
+
+.picker[data-open="true"] .picker-trigger {
+  background: var(--plate);
+  border-color: var(--fg);
+}
+
+/* Left: the node, and its hostname or the promise 自动选择 makes. Right: the
+   latency and what the measurement means. `min-width: 0` on the left half is what
+   lets a long hostname ellipsise instead of pushing the numbers off the row. */
+.picker-text {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.picker-name {
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.picker-host,
+.picker-note {
+  font-size: 12px;
+  color: var(--fg-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picker-host { font-family: var(--font-mono); }
+.picker-note { color: var(--fg-dim); }
+
+.picker-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  font-size: 12.5px;
+  color: var(--fg-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.picker-meta b { color: var(--fg); font-weight: 400; }
+
+.picker-state { color: var(--fg-dim); }
+
+.picker-caret {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 1.6px solid var(--fg-soft);
+  border-bottom: 1.6px solid var(--fg-soft);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.18s var(--ease);
+}
+
+.picker[data-open="true"] .picker-caret { transform: translateY(1px) rotate(-135deg); }
+
+.picker-list {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  top: calc(100% + 8px);
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--plate);
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.picker-list[hidden] { display: none; }
+
+.picker-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+/* The keyboard cursor and the chosen row are different states and have to look
+   different: one is where the arrow keys are, the other is what the tunnel will
+   actually use. */
+.picker-option[data-active="true"] { background: rgba(255, 255, 255, 0.05); }
+
+.picker-option[aria-selected="true"] { background: rgba(255, 255, 255, 0.07); }
+
+.picker-mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 1px solid var(--edge);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: transparent;
+}
+
+.picker-option[aria-selected="true"] .picker-mark {
+  border-color: var(--fg);
+  background: var(--red);
+  color: #fff;
+}
+
+.picker-mark .icon { width: 12px; height: 12px; }
+
+.picker-option .picker-text { flex: 1 1 auto; }
+
+/* --------------------------------------------------------- tunnel summary */
+
+.tunnel-empty {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  border-style: dashed;
+}
+
+.tunnel-empty-main { min-width: 0; }
+
+.tunnel-empty-title {
+  margin: 0 0 4px;
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.tunnel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+/* A smaller pill for the inline action in a section heading. */
+.btn--small {
+  height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.tunnel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.tunnel-cell {
+  background: var(--ground);
+  padding: 13px 16px 14px;
+}
+
+.tunnel-cell dt {
+  font-size: 12.5px;
+  color: var(--fg-soft);
+}
+
+.tunnel-cell dd {
+  margin: 5px 0 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.tunnel-cell dd code { font-size: 13px; }
+
+/* The address readout: the one filled plate on the page, as on the site. */
+.addr {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  background: var(--plate);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: clamp(14px, 1.5vw, 18px);
+  font-variant-numeric: tabular-nums;
+}
+
+.addr[data-assigned="false"] {
+  color: var(--fg-soft);
+  font-size: 13.5px;
+  padding-right: 14px;
+}
+
+.addr-copy {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  color: var(--fg);
+  cursor: pointer;
+  flex: none;
+}
+
+.addr-copy:hover { background: var(--ground); }
+
+/* ---------------------------------------------------------------- modes */
+
+/* 转发方式 and 协议 sit on one row: they are two halves of one decision (how the
+   tunnel is carried), and stacking them made the form taller for no gain. Each
+   keeps its own hint underneath, so a mode that is disabled still says why. */
+.mode-groups {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.mode-group {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.mode-group > .label { margin-bottom: 8px; }
+
+.mode-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+/* -------------------------------------------------------------- settings */
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--fg-soft);
+  cursor: pointer;
+}
+
+.switch input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--red);
+  margin: 0;
+}
+
+/*
+ * Long values (a local file path, a proxy URL, an address) are `overflow-wrap:
+ * anywhere`, which drops the grid track's automatic *minimum* to zero. In a
+ * `max-content` column that is not a problem, but a wrapper that is only as wide
+ * as its content has nothing to wrap against, so the browser takes the intrinsic
+ * maximum instead and the element stretches past its siblings. Capping the width
+ * gives wrapping something to work with.
+ */
+.kv {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 16px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg-soft);
+  max-width: 780px;
+}
+
+/* Terms and values sit on the same line box, so the two columns have to agree on
+   where that box is — otherwise the mono value hangs a pixel low against its
+   label. */
+.kv dt,
+.kv dd {
+  align-self: baseline;
+}
+
+.kv dt { color: var(--fg-dim); }
+
+.kv dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------- placeholders */
+
+.soon {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 28px 26px;
+  border: 1px dashed var(--rule);
+  border-radius: 16px;
+  max-width: 620px;
+}
+
+.soon .icon { color: var(--fg-soft); }
+.soon h3 { font-size: 17px; font-weight: 400; }
+.soon p { margin: 0; font-size: 13.5px; line-height: 1.7; color: var(--fg-soft); max-width: 58ch; }
+.soon p strong { color: var(--fg); font-weight: 600; }
+
+/* The icon and its status tag travel together, so the tag reads as belonging to the
+   icon rather than floating somewhere in the card. */
+.soon-mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pill--tag {
+  font-size: 11.5px;
+  padding: 3px 9px 3px 7px;
+}
+
+.soon-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+/* Says when the numbers were taken. Without it, a cached latency column looks
+   identical to one measured a second ago. */
+.probe-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+}
+.probe-note:empty { display: none; }
+
+.soon-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--fg-soft);
+}
+
+.soon-list li::marker { color: var(--red); }
