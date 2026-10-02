@@ -1,4 +1,4 @@
-/*
+﻿/*
  * hongshi shell — page components.
  *
  * Split from main.css only by subject, not by rule: the tokens, the three greys,
@@ -342,7 +342,7 @@
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(20, 3, 6, 0.66);
+  background: rgba(var(--scrim-rgb), 0.66);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
   animation: dlg-fade 0.18s var(--ease) both;
@@ -444,7 +444,7 @@
   position: fixed;
   border-radius: 12px;
   pointer-events: none;
-  box-shadow: 0 0 0 3px var(--signal), 0 0 0 9999px rgba(20, 3, 6, 0.72);
+  box-shadow: 0 0 0 3px var(--signal), 0 0 0 9999px rgba(var(--scrim-rgb), 0.72);
   transition: top 0.22s var(--ease), left 0.22s var(--ease),
     width 0.22s var(--ease), height 0.22s var(--ease);
 }
@@ -912,9 +912,11 @@ html.has-dialog body {
 
 .game-note {
   font-size: 13px;
-  /* Painted, not translucent: a white at 78% over this scrim comes out pink, and
-     the note sits on the artwork where nothing else in the palette does. */
-  color: #f4dade;
+  /* The brightest text tier, painted and opaque: a white at 78% over this scrim comes
+     out whatever the scrim's hue is, and the note sits on the artwork where nothing
+     else in the palette does. Taking the token rather than a literal is what makes it
+     follow a theme — it is interface text that happens to be over a picture. */
+  color: var(--fg);
   line-height: 1.5;
 }
 
@@ -1379,7 +1381,10 @@ html.has-dialog body {
 .picker-option[aria-selected="true"] .picker-mark {
   border-color: var(--fg);
   background: var(--red);
-  color: #fff;
+  /* The glyph on the accent, so it is the token that says what text on the accent is
+     — a white tick on a bright accent is invisible, and which accents are bright is a
+     property of the theme rather than of this rule. */
+  color: var(--on-signal);
 }
 
 .picker-mark .icon { width: 12px; height: 12px; }
@@ -1658,6 +1663,51 @@ input[type="range"] {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-dim);
+}
+
+/* The theme's two colour controls. The native picker is deliberate: it is the one
+   control on every platform that shows the whole spectrum *and* has an eyedropper,
+   and a hand-rolled HSL pad would be a worse version of it that also cannot match
+   the OS. Only its frame is ours. */
+.theme-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.color-well {
+  width: 46px;
+  height: 38px;
+  padding: 3px;
+  border: 1px solid var(--rule);
+  border-radius: 11px;
+  background: var(--plate);
+  cursor: pointer;
+}
+.color-well:hover { border-color: var(--fg); }
+.color-well::-webkit-color-swatch-wrapper { padding: 0; }
+.color-well::-webkit-color-swatch { border: none; border-radius: 8px; }
+.color-well::-moz-color-swatch { border: none; border-radius: 8px; }
+.theme-hex {
+  width: 12ch;
+  flex: 0 0 auto;
+  text-transform: lowercase;
+}
+
+/* What the derived palette looks like, in the order it is layered: board, recess,
+   card, border, the two text tiers, the accent. The point is to answer "what will I
+   get" before the user saves anything. */
+.theme-swatches {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.theme-swatches .swatch {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--rule);
+  border-radius: 9px;
 }
 
 /*

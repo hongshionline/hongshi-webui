@@ -52,6 +52,19 @@ pub struct Settings {
     pub background_crop_y: u16,
     pub background_crop_w: u16,
     pub background_crop_h: u16,
+
+    /// The hue the interface is painted in, as `#rrggbb`; empty means the palette the
+    /// binary ships with. **One colour, not a palette**: every surface, text tier,
+    /// border and accent is derived from it by the page, because the shipped palette
+    /// is one hue with a fixed set of saturations and lightnesses and a user choosing
+    /// fourteen tokens by hand would be choosing fourteen ways to make the interface
+    /// unreadable. See `derivePalette` in `app.js`.
+    pub theme_color: String,
+    /// The one accent (buttons, the current destination, the top of the heat ramp);
+    /// empty means "derive it from `theme_color`", which is what almost everybody
+    /// wants. Stored separately because "I like this board but not that orange" is a
+    /// real request and the alternative is a palette editor.
+    pub theme_accent: String,
 }
 
 impl Default for Settings {
@@ -72,8 +85,34 @@ impl Default for Settings {
             background_crop_y: 0,
             background_crop_w: 1000,
             background_crop_h: 1000,
+            // Empty is not "no colour": it is the palette in the stylesheet, and it is
+            // the default because a user who never opens 个性化 must get exactly the
+            // interface the design was measured for.
+            theme_color: String::new(),
+            theme_accent: String::new(),
         }
     }
+}
+
+/// Accept `#rgb`, `#rrggbb`, with or without the `#`, and return `#rrggbb` lower-case.
+///
+/// The page is what paints with this value, so what the shell owes it is a value that
+/// is *one* value: an interface that stores `#ABC` and `#abc` as different settings is
+/// an interface whose colour picker shows the wrong swatch when it comes back.
+///
+/// The refusal is a sentence rather than a status, for the same reason the background's
+/// refusals are: it is shown next to the field the user just typed into.
+pub fn normalize_color(value: &str) -> Result<String, String> {
+    let trimmed = value.trim().trim_start_matches('#');
+    let expanded = match trimmed.len() {
+        3 => trimmed.chars().flat_map(|c| [c, c]).collect::<String>(),
+        6 => trimmed.to_string(),
+        _ => return Err("颜色要写成 #RRGGBB（或者 #RGB）".to_string()),
+    };
+    if !expanded.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("颜色里只能有 0-9 和 A-F".to_string());
+    }
+    Ok(format!("#{}", expanded.to_ascii_lowercase()))
 }
 
 /// Keep a crop inside the image and large enough to be worth rendering.
@@ -116,7 +155,9 @@ impl Settings {
                 "  \"background_path\": \"{}\",\n",
                 "  \"background_blur\": {},\n",
                 "  \"background_darkness\": {},\n",
-                "  \"background_crop\": {{ \"x\": {}, \"y\": {}, \"w\": {}, \"h\": {} }}\n",
+                "  \"background_crop\": {{ \"x\": {}, \"y\": {}, \"w\": {}, \"h\": {} }},\n",
+                "  \"theme_color\": \"{}\",\n",
+                "  \"theme_accent\": \"{}\"\n",
                 "}}\n"
             ),
             escape_json(&self.api_base),
@@ -131,6 +172,8 @@ impl Settings {
             self.background_crop_y,
             self.background_crop_w,
             self.background_crop_h,
+            escape_json(&self.theme_color),
+            escape_json(&self.theme_accent),
         )
     }
 
@@ -191,6 +234,25 @@ impl Settings {
                 self.background_crop_y = y;
                 self.background_crop_w = w;
                 self.background_crop_h = h;
+            }
+        }
+        // A colour that cannot be read is *ignored* rather than stored: the page would
+        // paint nothing for it and the user would have no idea why. The settings
+        // endpoint is where the refusal gets said out loud, while the field is on
+        // screen; this is only here for a file somebody edited by hand.
+        for (key, slot) in [
+            ("theme_color", &mut self.theme_color),
+            ("theme_accent", &mut self.theme_accent),
+        ] {
+            if let Some(value) = json_string(text, key) {
+                let normalized = if value.trim().is_empty() {
+                    Some(String::new())
+                } else {
+                    normalize_color(&value).ok()
+                };
+                if let Some(color) = normalized {
+                    *slot = color;
+                }
             }
         }
     }
@@ -441,9 +503,52 @@ mod tests {
             background_crop_y: 0,
             background_crop_w: 600,
             background_crop_h: 800,
+            theme_color: "#123a5c".to_string(),
+            theme_accent: "#ff5a33".to_string(),
         };
         let text = settings.to_json();
         assert_eq!(Settings::from_json(&text), settings);
+    }
+
+    #[test]
+    fn a_theme_that_was_never_set_is_the_palette_in_the_stylesheet() {
+        let settings = Settings::default();
+        assert_eq!(settings.theme_color, "");
+        assert_eq!(settings.theme_accent, "");
+        assert!(
+            settings.to_json().contains(r#""theme_color": """#),
+            "the file has to say so too: an absent key and an empty one mean the same thing"
+        );
+    }
+
+    #[test]
+    fn a_colour_is_normalized_to_one_spelling() {
+        // Three ways to write the same colour have to store as one, or the picker comes
+        // back showing a swatch that disagrees with the file.
+        for written in ["#ABC", "abc", "  #aabbcc  ", "#AABBCC"] {
+            assert_eq!(normalize_color(written).unwrap(), "#aabbcc", "{written}");
+        }
+        assert_eq!(normalize_color("#0A1B2C").unwrap(), "#0a1b2c");
+
+        for junk in ["", "#", "#12", "#12345", "#1234567", "red", "#gggggg", "rgb(1,2,3)"] {
+            assert!(normalize_color(junk).is_err(), "{junk} is not a colour");
+        }
+        assert!(normalize_color("#12345").unwrap_err().contains("#RRGGBB"));
+    }
+
+    #[test]
+    fn a_colour_that_cannot_be_read_is_ignored_rather_than_stored() {
+        let mut settings = Settings::default();
+        settings.apply_json(r##"{"theme_color":"#3a1c6e"}"##);
+        assert_eq!(settings.theme_color, "#3a1c6e");
+
+        // Junk leaves the good value where it was; the endpoint is what tells the user.
+        settings.apply_json(r#"{"theme_color":"not a colour"}"#);
+        assert_eq!(settings.theme_color, "#3a1c6e");
+
+        // And an empty string is how the interface says "back to the built-in palette".
+        settings.apply_json(r#"{"theme_color":""}"#);
+        assert_eq!(settings.theme_color, "");
     }
 
     #[test]

@@ -595,6 +595,46 @@ try {
     Remove-Item -Recurse -Force $bgDir -ErrorAction SilentlyContinue
 
     # -----------------------------------------------------------------------
+    # 主题配色: the one colour the whole palette is derived from.
+    #
+    # The shell stores it and refuses a value it cannot read; the *derivation* is the
+    # page's job (it owns the variables), so what is checked here is the stored
+    # contract: one spelling per colour, a refusal that says which field, and the
+    # original value back at the end.
+    Write-Host ''
+    Write-Host 'the theme colour' -ForegroundColor Cyan
+
+    function Set-Theme([string]$color) {
+        $escaped = $color.Replace('\', '\\').Replace('"', '\"')
+        return Send-Request $port 'POST' '/api/settings' $authority @{} ("{""theme_color"":""$escaped""}")
+    }
+
+    $originalTheme = ((Send-Request $port 'GET' '/api/settings' $authority @{} $null).Body | ConvertFrom-Json).settings.theme_color
+
+    $badTheme = Set-Theme 'not a colour'
+    Assert-That 'a colour that cannot be read is refused' `
+        ($badTheme.Status -eq 400 -and $badTheme.Body.Contains('"state":"bad_color"')) "status $($badTheme.Status): $($badTheme.Body)"
+    Assert-That 'the refusal names the field and what is expected' `
+        ($badTheme.Body.Contains('"field":"theme_color"') -and $badTheme.Body.Contains('#RRGGBB')) $badTheme.Body
+
+    # One spelling per colour, or the picker comes back showing a swatch that disagrees
+    # with the file it was read from.
+    $shortTheme = Set-Theme '#0A1'
+    Assert-That 'a short colour is accepted and normalised' `
+        ($shortTheme.Status -eq 200 -and (($shortTheme.Body | ConvertFrom-Json).settings.theme_color -eq '#00aa11')) $shortTheme.Body
+
+    $readBack = ((Send-Request $port 'GET' '/api/settings' $authority @{} $null).Body | ConvertFrom-Json).settings.theme_color
+    Assert-That 'and stored in the one form the page paints from' ($readBack -eq '#00aa11') $readBack
+
+    $cleared = Set-Theme ''
+    Assert-That 'an empty colour is the built-in palette, not an error' `
+        ($cleared.Status -eq 200 -and (($cleared.Body | ConvertFrom-Json).settings.theme_color -eq '')) $cleared.Body
+
+    Set-Theme $originalTheme | Out-Null
+    $restored = ((Send-Request $port 'GET' '/api/settings' $authority @{} $null).Body | ConvertFrom-Json).settings.theme_color
+    Assert-That 'the theme the run started with is put back' ($restored -eq $originalTheme) "$restored vs $originalTheme"
+
+    # -----------------------------------------------------------------------
     # Minecraft 资讯. The shell fetches Mojang's launcher feed and trims it; the page
     # never talks to Mojang itself. This is the one block that needs the internet, so
     # a feed that does not answer is skipped rather than failed - what is asserted is
@@ -1006,6 +1046,30 @@ Assert-That 'a picture that will not load falls back to the built-in one' `
     (($appText -match 'function useBuiltInBackground') -and ($appText -match 'bgEl\.dataset\.on = "0"'))
 Assert-That 'the built-in background stays on the body, not behind a probe' `
     ([IO.File]::ReadAllText((Join-Path $webDir 'main.css')) -match 'url\("asset/lowpoly\.webp"\)')
+
+# ---------------------------------------------------------------------------
+# The theme colour, from the source side.
+#
+# The derivation is the page's, and it is only reachable when a theme is set: with an
+# empty `theme_color` the stylesheet's own palette has to stand, untouched. That is the
+# promise the default install depends on, and it is kept by *removing* the overrides
+# rather than by writing the defaults back — so the check is that the list of tokens the
+# derivation writes is also the list that gets cleared.
+Assert-That 'a theme derives the whole palette from one colour' `
+    (($appText -match 'function derivePalette\(baseHex, accentHex\)') -and
+     ($appText -match 'function applyTheme\(settings\)') -and
+     ($appText -match 'THEME_GROUND_LUMINANCE'))
+Assert-That 'the built-in palette is restored by removing overrides, not by copying it' `
+    (($appText -match 'root\.style\.removeProperty\(THEME_TOKENS\[i\]\)') -and
+     ($appText -match 'var THEME_TOKENS = \['))
+Assert-That 'the theme travels on the wire like every other setting' `
+    (($pagesText -match 'patch\.theme_color = ') -and ($pagesText -match 'id="set-theme"') -and
+     ($pagesText -match 'id="set-accent"'))
+# A white glyph on the accent is invisible on a bright accent, and which accents are
+# bright is the theme's business — so the one place that draws on the accent asks the
+# token instead of hardcoding white.
+Assert-That 'text on the accent asks the token' `
+    ([IO.File]::ReadAllText((Join-Path $webDir 'app.css')) -match 'color: var\(--on-signal\)')
 
 # 房间开着的那一段时间是唯一能问「朋友怎么进来」的时刻，所以那两个入口就长在地址下面。
 # 引导只出现一次，帮助页得从这个位置进得去。

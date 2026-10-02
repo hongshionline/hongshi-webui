@@ -1211,6 +1211,28 @@ fn settings_endpoint(request: &Request, body: &[u8], context: &ServerContext) ->
             }
         }
 
+        // A theme colour is checked for the same reason and in the same place: it is
+        // one value the page paints fourteen tokens from, and a typo in it would be a
+        // palette derived from nothing. Empty is allowed and means "the built-in one".
+        for field in ["theme_color", "theme_accent"] {
+            let Some(raw) = json_field(&text, field) else { continue };
+            if raw.trim().is_empty() {
+                continue;
+            }
+            if let Err(reason) = crate::config::normalize_color(&raw) {
+                info_fields("refused a theme colour that cannot be read", &[("field", field)]);
+                return Response::new(
+                    400,
+                    "application/json; charset=utf-8",
+                    format!(
+                        r#"{{"state":"bad_color","field":"{}","reason":"{}"}}"#,
+                        field,
+                        escape_json(&reason)
+                    ),
+                );
+            }
+        }
+
         let path = match crate::config::save(&updated) {
             Ok(path) => path,
             Err(err) => {
@@ -2506,6 +2528,43 @@ mod tests {
             "",
             "a refused save leaves the settings alone"
         );
+    }
+
+    #[test]
+    fn a_settings_save_cannot_store_a_theme_colour_that_cannot_be_read() {
+        let ctx = context();
+        let shutdown = shutdown();
+        let patch = br#"{"theme_color":"not a colour"}"#;
+        let response = route(
+            &request("POST", "/api/settings", "", &[("host", "127.0.0.1:1")]),
+            patch,
+            &ctx,
+            &shutdown,
+        );
+        assert_eq!(response.status, 400);
+        let body = String::from_utf8(response.body).unwrap();
+        assert!(body.contains(r#""state":"bad_color""#), "{body}");
+        assert!(body.contains(r#""field":"theme_color""#), "{body}");
+        assert!(body.contains("#RRGGBB"), "{body}");
+        assert_eq!(ctx.settings().theme_color, "", "refused means not stored");
+
+        // And the settings the page reads carry the theme it painted, so a second
+        // browser opening the same client gets the same colours.
+        let ctx = context();
+        {
+            let mut settings = ctx.settings.write().unwrap();
+            settings.theme_color = "#123a5c".to_string();
+            settings.theme_accent = "#22d3ee".to_string();
+        }
+        let response = route(
+            &request("GET", "/api/settings", "", &[("host", "127.0.0.1:1")]),
+            &[],
+            &ctx,
+            &shutdown,
+        );
+        let body = String::from_utf8(response.body).unwrap();
+        assert!(body.contains(r##""theme_color": "#123a5c""##), "{body}");
+        assert!(body.contains(r##""theme_accent": "#22d3ee""##), "{body}");
     }
 
     #[test]

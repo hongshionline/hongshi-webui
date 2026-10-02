@@ -407,6 +407,48 @@ file's **first bytes** rather than its extension, so a `.jpg` that is really an 
 for what it is, and a refused path is never stored — the shell judges it while the person who typed it
 is still looking at the field.
 
+### 主题配色: one colour, and twenty tokens follow
+
+个性化 is also where the interface's **hue** is chosen, and that sounds like a colour picker while
+really being a derivation. This palette is *one hue*: every surface, text tier, border and terminal in
+it sits at H ≈ 350–356 and differs only in saturation and lightness, which is exactly what makes its
+contrast ratios hold. So a theme is one colour, and everything else is computed from it by keeping the
+relationships the palette was measured at:
+
+* the **surface ramp** reproduces the shipped steps in *relative luminance* — wash 1.64×, plate 2.93×,
+  rule 5.72× the ground, the log's screen 0.39× — rather than in lightness, because the same lightness
+  step is a very different amount of light for a blue than for a yellow;
+* the **four text tiers** are solved for their contrast over `--plate` (9.5 / 6.65 / 4.31 / 2.19) by
+  bisection, and their saturations scale with the base's, so a grey board gets grey text instead of the
+  red palette's pink on grey;
+* the **accent** is the same hue rotated +16° at full saturation, which is what the shipped palette
+  does (H 354 → 11.5): a signal red on a red board separates by luminance rather than hue, and the
+  rotation is what makes it read as "brighter" instead of "the same";
+* the **semantic colours stay put** — green for 可建隧道, amber for the heat glyph, red for 断联. They
+  are meanings, and a theme that turns 可建隧道 purple is a theme that broke a reading.
+
+Two things are deliberately not the user's to choose, and both are said out loud rather than done
+quietly. The **brand mark stays red**: it is the product's namesake, it is the same file the tab and
+the taskbar show, and a theme repaints the interface rather than the logo. The other is **how bright
+the board is** — the ground's luminance is clamped, because every contrast ratio here is measured
+against a surface above it and a pale board leaves the top text tier nowhere to go.
+
+Clamping *lightness* is the obvious version of that and it is wrong, which is worth writing down
+because it looked right for a whole round. 22.7% lightness is a dark red and a grey that is **twice as
+bright**, and the grey is the one that breaks: a `#3a3a3d` board derived `--fg` and `--fg-soft` to the
+*same* colour at 5.97:1, because both targets (9.5 and 6.65) were unreachable over its plate and both
+fell back to white. The ladder had collapsed into a single rung and nothing said so.
+
+The self-check that says the recipe is faithful: deriving from the shipped `#4a0a10` reproduces the
+shipped palette to within one or two units per channel (`--plate` `#7e141c` → `#7e141e`, `--fg-soft`
+`#f2c2c9` → `#f2c2c7`), and the ladder comes out 9.49 / 6.64 / 4.30 / 2.20 against the shipped
+9.51 / 6.65 / 4.31 / 2.19.
+
+With `theme_color` empty — which is every install that never opens 个性化 — **none of that code runs**.
+The overrides are *removed* rather than rewritten in the built-in values, so the palette exists in
+exactly one place, the stylesheet, and a default install gets the interface the design was measured for
+rather than a reproduction of it.
+
 ## Status: phase 2 — the kernel is wired up
 
 Working now: the whole interface, the local server, the site proxy, the node
@@ -589,6 +631,10 @@ drawer wiring after it, leaving only a status pill frozen on "连接中…". Two
 
 * `node scripts/undeclared.mjs web/app.js web/pages.js` finds names that are read but never declared.
   `cargo test` and `scripts/verify.ps1` both refuse to pass while it reports one.
+* `python scripts/palette-measure.py` prints the shipped palette's relationships: every token's HSL,
+  its contrast over `--plate` and `--ground`, and the surface ramp in relative luminance. The `THEME_*`
+  tables in `app.js` were read off it, and it is how a change to either side gets checked — a theme
+  derived from the shipped `--ground` has to come back within a unit or two per channel.
 * `renderPage()` in `app.js` catches a throwing page, shows the error in the page area, and keeps the
   rest of the client running.
 
@@ -597,7 +643,9 @@ The page follows the site's design system in `../HongshiMain/DESIGN.md`: pill co
 
 ### The board is red
 
-It is a **bright, saturated red**, not a grey board with a red accent, and that is a different
+**By default.** 个性化 can repaint it in any hue — one colour, and the palette follows; see
+[主题配色](#主题配色-one-colour-and-twenty-tokens-follow) below. What that section relies on is this one:
+the board is **bright and saturated**, not a grey board with a red accent, and that is a different
 problem from the one the old palette solved. Two things the grey scheme leaned on do not survive.
 
 **Text can no longer retreat by opacity.** A white at 60% over a red ground is not dimmer white, it
@@ -607,10 +655,15 @@ luminance over `--plate` (`#7E141C`):
 
 | token | value | on `--plate` |
 |---|---|---|
-| `--fg` | `#FDF1F3` | 13.5:1 |
-| `--fg-soft` | `#F2C2C9` | 9.0:1 |
-| `--fg-dim` | `#DA939D` | 6.6:1 |
-| `--fg-faint` | `#A85C67` | 3.5:1 — labels, not prose |
+| `--fg` | `#FDF1F3` | 9.5:1 |
+| `--fg-soft` | `#F2C2C9` | 6.7:1 |
+| `--fg-dim` | `#DA939D` | 4.3:1 |
+| `--fg-faint` | `#A85C67` | 2.2:1 — labels, not prose |
+
+Those four numbers are measured, not estimated: `python scripts/palette-measure.py` prints them off
+the stylesheet, and they are the targets `derivePalette` solves for when the hue changes. The table
+here used to carry larger ones from an earlier palette, which is the kind of drift a measurement
+script exists to stop.
 
 The surfaces are three heights of one red — `--ground: #4A0A10`, `--plate: #7E141C`, `--rule:
 #A8242D` — and `--wash: #5F0E15` is a recessed surface *inside* a plate. A translucent white would

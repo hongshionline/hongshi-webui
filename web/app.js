@@ -1634,6 +1634,325 @@
     });
   }
 
+  /* ---------------------------------------------------------------- theme */
+
+  /*
+   * The interface is **one hue**. That is not a style preference, it is what the
+   * stylesheet's own palette measures out as: every surface, every text tier and every
+   * border in it sits at H ≈ 350–356 and differs only in saturation and lightness,
+   * chosen so that each step is a real step in luminance. Two families are deliberately
+   * outside that: the accent, which is the same hue rotated +16° (H 354 → 11.5) because
+   * a signal red on a red board has nothing to say, and the semantic colours — green for
+   * 可建隧道, amber for the heat glyph, red for 断联 — which are *meanings* and must not
+   * rotate with the board.
+   *
+   * So a theme is one colour, and everything else is derived from it by keeping the
+   * relationships the palette was measured at. Letting a user pick fourteen tokens is
+   * fourteen ways to make the interface unreadable, and it is why the palette is
+   * documented with contrast ratios in the first place.
+   *
+   * All of this is arithmetic on a colour, and **none of it runs unless a theme is
+   * set**: with `theme_color` empty the stylesheet's palette stands untouched, so the
+   * interface every install gets by default is the one the design was measured for,
+   * not a reproduction of it.
+   *
+   * The numbers below came out of `scripts/palette-measure.py`, which prints each shipped
+   * token's HSL and its luminance relative to `--ground`. They are measurements, not
+   * taste — changing one changes what the built-in palette becomes when somebody derives
+   * a theme from that same colour, and running the script again is how you check.
+   */
+
+  /* Surface ramp: [luminance × the ground's, saturation × the base's]. */
+  var THEME_SURFACES = {
+    wash: [1.64, 0.97],
+    plate: [2.93, 0.95],
+    rule: [5.72, 0.85],
+    screen: [0.39, 0.94],
+    "screen-surface": [0.70, 0.90],
+    "screen-line": [1.78, 0.81]
+  };
+
+  /* Text tiers: [contrast over the plate it sits on, saturation %]. The shipped
+     saturations are what the base's own saturation scales: a grey board gets grey text
+     rather than pink text on grey, which is the failure this table prevents. */
+  var THEME_TEXTS = {
+    fg: [9.5, 75],
+    "fg-soft": [6.65, 65],
+    "fg-dim": [4.31, 49],
+    edge: [4.24, 67],
+    "fg-faint": [2.19, 30]
+  };
+
+  /* The accent family: [hue +, saturation ×, lightness %, Δlightness when the user
+     picked the accent themselves]. `signal` is the one thing every theme needs — a
+     bright step that separates from the board by luminance — and the rest are its
+     neighbours. `heat-1` is in here because it is a quiet step of the same family. */
+  var THEME_ACCENTS = [
+    ["signal", 16, 1.00, 60, 0],
+    ["signal-hot", 17, 1.00, 66, 6],
+    ["signal-deep", 0, 0.76, 50, -10],
+    ["signal-dim", 2, 0.64, 46, -14],
+    ["signal-ink", 6, 1.00, 27, -33],
+    ["term-live", 13, 1.00, 74, 14],
+    ["heat-1", 2, 0.45, 58, -2]
+  ];
+
+  /* Everything `applyTheme` writes. The list exists so the built-in palette can be put
+     back by *removing* the overrides rather than by writing a copy of the defaults into
+     the document — one source of truth for what the built-in look is. */
+  var THEME_TOKENS = [
+    "--ground", "--wash", "--plate", "--rule",
+    "--screen", "--screen-surface", "--screen-line",
+    "--fg", "--fg-soft", "--fg-dim", "--edge", "--fg-faint",
+    "--signal", "--signal-hot", "--signal-deep", "--signal-dim", "--signal-ink",
+    "--term-live", "--term-fg",
+    "--heat-1", "--heat-2", "--heat-3",
+    "--on-signal", "--scrim-rgb", "--dead"
+  ];
+
+  var themeState = { color: "", accent: "" };
+
+  /*
+   * The ground's relative luminance — the one property of the base colour that is not
+   * the user's to choose.
+   *
+   * Every contrast ratio in this palette is measured against a *surface*, and the
+   * surfaces are a ramp above the ground. A board bright enough to look pale leaves the
+   * top text tier nowhere to go: at the shipped ramp's 2.93× step, a ground above 0.0206
+   * puts `--plate` at a luminance where even pure white is only 9.5:1 over it, and the
+   * ladder collapses — measured, not reasoned: a #3a3a3d board derived `--fg` and
+   * `--fg-soft` to the *same* colour, 5.97:1, because both targets were unreachable and
+   * both fell back to white.
+   *
+   * So the luminance is clamped instead of the lightness. Clamping lightness is what the
+   * first version did, and it is wrong for a reason worth keeping: lightness is not
+   * brightness. 22.7% lightness is a dark red and a *grey that is twice as bright*, and
+   * the grey is the one that breaks. The band is the shipped ground (0.0171) with room
+   * below it and a little above, and the ceiling is exactly where 9.5:1 stops being
+   * reachable.
+   */
+  var THEME_GROUND_LUMINANCE = [0.007, 0.0206];
+
+  /**
+   * What a base colour becomes: the hue and saturation the user picked, at a luminance
+   * the interface can be read on. `clamped` is whether those differ, which the settings
+   * page says out loud rather than changing somebody's colour in silence.
+   */
+  function themeFit(baseHex) {
+    var rgb = hexToRgb(baseHex);
+    if (!rgb) return null;
+    var hsl = rgbToHsl(rgb);
+    var wanted = relativeLuminance(rgb);
+    var used = clamp(wanted, THEME_GROUND_LUMINANCE[0], THEME_GROUND_LUMINANCE[1]);
+    return {
+      hue: hsl.h,
+      saturation: hsl.s,
+      wanted: wanted,
+      used: used,
+      clamped: Math.abs(wanted - used) > 0.0005,
+      lightness: hsl.l
+    };
+  }
+
+  function hexToRgb(value) {
+    var text = String(value || "").trim().replace(/^#/, "");
+    if (text.length === 3) text = text[0] + text[0] + text[1] + text[1] + text[2] + text[2];
+    if (!/^[0-9a-f]{6}$/i.test(text)) return null;
+    return [
+      parseInt(text.slice(0, 2), 16),
+      parseInt(text.slice(2, 4), 16),
+      parseInt(text.slice(4, 6), 16)
+    ];
+  }
+
+  function toHex(rgb) {
+    return "#" + rgb.map(function (channel) {
+      var value = Math.max(0, Math.min(255, Math.round(channel)));
+      return (value < 16 ? "0" : "") + value.toString(16);
+    }).join("");
+  }
+
+  function rgbToHsl(rgb) {
+    var r = rgb[0] / 255;
+    var g = rgb[1] / 255;
+    var b = rgb[2] / 255;
+    var max = Math.max(r, g, b);
+    var min = Math.min(r, g, b);
+    var lightness = (max + min) / 2;
+    if (max === min) return { h: 0, s: 0, l: lightness };
+    var delta = max - min;
+    var saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+    var hue;
+    if (max === r) hue = (g - b) / delta + (g < b ? 6 : 0);
+    else if (max === g) hue = (b - r) / delta + 2;
+    else hue = (r - g) / delta + 4;
+    return { h: hue * 60, s: saturation, l: lightness };
+  }
+
+  function hslToRgb(h, s, l) {
+    var chroma = (1 - Math.abs(2 * l - 1)) * s;
+    var hue = (((h % 360) + 360) % 360) / 60;
+    var second = chroma * (1 - Math.abs((hue % 2) - 1));
+    var rgb = hue < 1 ? [chroma, second, 0]
+      : hue < 2 ? [second, chroma, 0]
+      : hue < 3 ? [0, chroma, second]
+      : hue < 4 ? [0, second, chroma]
+      : hue < 5 ? [second, 0, chroma]
+      : [chroma, 0, second];
+    var base = l - chroma / 2;
+    return rgb.map(function (channel) { return (channel + base) * 255; });
+  }
+
+  /**
+   * The lightness at which `hsl(h, s, ·)` reaches a given relative luminance.
+   *
+   * Luminance is monotone in lightness for a fixed hue and saturation, so this is a
+   * plain bisection — and doing it by *luminance* rather than by scaling lightness is
+   * what keeps the ramp's steps equal for a blue theme and for a yellow one, where the
+   * same lightness step is a very different amount of light.
+   */
+  function lightnessForLuminance(h, s, target) {
+    var low = 0;
+    var high = 1;
+    for (var i = 0; i < 22; i++) {
+      var mid = (low + high) / 2;
+      if (relativeLuminance(hslToRgb(h, s, mid)) < target) low = mid;
+      else high = mid;
+    }
+    return (low + high) / 2;
+  }
+
+  /**
+   * The lightness at which `hsl(h, s, ·)` has a given contrast over a surface.
+   *
+   * Every tier sits *lighter* than the card it is drawn on, which is what makes the
+   * ladder read downward, so the search starts at the surface's own lightness and walks
+   * up. A target that cannot be reached (a theme whose surface is already bright) gets
+   * white, which is the best available answer rather than a wrong one.
+   */
+  function lightnessForContrast(h, s, against, ratio, from) {
+    var white = hslToRgb(h, s, 1);
+    if (contrastRatio(white, against) < ratio) return 1;
+    var low = from;
+    var high = 1;
+    for (var i = 0; i < 22; i++) {
+      var mid = (low + high) / 2;
+      if (contrastRatio(hslToRgb(h, s, mid), against) >= ratio) high = mid;
+      else low = mid;
+    }
+    return (low + high) / 2;
+  }
+
+  /**
+   * One colour in, the whole palette out.
+   *
+   * The base is taken as the ground, at the hue and saturation the user picked and at a
+   * luminance the interface can be read on — see [`THEME_GROUND_LUMINANCE`] for why that
+   * is the one thing which is not theirs to choose.
+   */
+  function derivePalette(baseHex, accentHex) {
+    var fit = themeFit(baseHex);
+    if (!fit) return {};
+    var hue = fit.hue;
+    var sat = fit.saturation;
+    var tokens = {};
+
+    var ground = hslToRgb(hue, sat, lightnessForLuminance(hue, sat, fit.used));
+    tokens["--ground"] = toHex(ground);
+    var groundLuminance = relativeLuminance(ground);
+
+    for (var name in THEME_SURFACES) {
+      if (!Object.prototype.hasOwnProperty.call(THEME_SURFACES, name)) continue;
+      var surface = THEME_SURFACES[name];
+      var surfaceSat = Math.min(1, sat * surface[1]);
+      var target = Math.max(0.0035, groundLuminance * surface[0]);
+      tokens["--" + name] = toHex(hslToRgb(hue, surfaceSat, lightnessForLuminance(hue, surfaceSat, target)));
+    }
+
+    var plate = hexToRgb(tokens["--plate"]);
+    var plateLightness = rgbToHsl(plate).l;
+    var screen = hexToRgb(tokens["--screen-surface"]);
+    for (var textName in THEME_TEXTS) {
+      if (!Object.prototype.hasOwnProperty.call(THEME_TEXTS, textName)) continue;
+      var tier = THEME_TEXTS[textName];
+      // The shipped saturation at the shipped base saturation, then scaled: this is what
+      // makes a grey board produce grey text instead of the red palette's tints.
+      var tierSat = Math.min(0.85, (tier[1] / 100) * (sat / 0.762));
+      tokens["--" + textName] =
+        toHex(hslToRgb(hue, tierSat, lightnessForContrast(hue, tierSat, plate, tier[0], plateLightness)));
+    }
+
+    var accentBase = accentHex ? rgbToHsl(hexToRgb(accentHex)) : null;
+    // A grey board has no hue to rotate, so its accent is brightness rather than a
+    // colour: a monochrome theme with a randomly-hued button is worse than no accent.
+    var accentSat = accentBase ? accentBase.s : (sat < 0.1 ? 0 : 1);
+    for (var i = 0; i < THEME_ACCENTS.length; i++) {
+      var step = THEME_ACCENTS[i];
+      tokens["--" + step[0]] = accentBase
+        ? (step[0] === "signal"
+          ? toHex(hexToRgb(accentHex))
+          : toHex(hslToRgb(accentBase.h, step[0] === "heat-1" ? accentBase.s * 0.45 : accentBase.s,
+            clamp(accentBase.l * 100 + step[4], 4, 96) / 100)))
+        : toHex(hslToRgb(hue + step[1], accentSat * step[2], step[3] / 100));
+    }
+
+    // The heat ramp's top two steps are the fire family, and the quietest reading is the
+    // quietest text tier — both of which are one value, so they are one token.
+    tokens["--heat-2"] = tokens["--signal-deep"];
+    tokens["--heat-3"] = tokens["--signal"];
+    tokens["--dead"] = tokens["--fg-faint"];
+
+    // The log is a screen, so its text is measured against the screen's surface and not
+    // against a card: 12.5:1 is what the shipped `--term-fg` measures there.
+    var termSat = Math.min(0.85, 0.64 * (sat / 0.762));
+    tokens["--term-fg"] = toHex(hslToRgb(hue, termSat,
+      lightnessForContrast(hue, termSat, screen, 12.5, rgbToHsl(screen).l)));
+
+    // The wash is the ground, darker: 0.44× its luminance, which is what `rgba(46,7,12)`
+    // is against `#4a0a10`.
+    var scrim = hslToRgb(hue, sat * 0.97, lightnessForLuminance(hue, sat * 0.97, groundLuminance * 0.44));
+    tokens["--scrim-rgb"] = scrim.map(function (channel) { return Math.round(channel); }).join(", ");
+
+    /*
+     * Text on the accent. The rules differ by which accent it is: 3:1 is the large-text
+     * threshold and the label is a semibold button, which is also the choice the shipped
+     * palette made — white on `#ff5a33` measures 3.11:1. Asking for 4.5 would repaint
+     * 开启房间 with dark text the moment somebody changed the hue, and changing the hue
+     * of a button is not a request to change its text colour.
+     */
+    var signal = hexToRgb(tokens["--signal"]);
+    tokens["--on-signal"] = contrastRatio([255, 255, 255], signal) >= 3
+      ? "#ffffff"
+      : toHex(hslToRgb(hue, accentBase ? accentBase.s * 0.5 : accentSat * 0.5, 0.1));
+
+    return tokens;
+  }
+
+  /**
+   * Paint the configured theme, or put the stylesheet's own palette back.
+   *
+   * Removing the overrides rather than writing the defaults is deliberate: the built-in
+   * palette lives in `main.css` and nowhere else, so there is exactly one copy of it and
+   * a default install cannot drift from the design it was measured for.
+   */
+  function applyTheme(settings) {
+    var root = document.documentElement;
+    for (var i = 0; i < THEME_TOKENS.length; i++) root.style.removeProperty(THEME_TOKENS[i]);
+
+    var color = settings && settings.theme_color;
+    var accent = settings && settings.theme_accent;
+    if (!color || !hexToRgb(color)) {
+      themeState = { color: "", accent: "", palette: null };
+      return themeState;
+    }
+    var palette = derivePalette(color, accent && hexToRgb(accent) ? accent : "");
+    for (var name in palette) {
+      if (Object.prototype.hasOwnProperty.call(palette, name)) root.style.setProperty(name, palette[name]);
+    }
+    themeState = { color: color, accent: accent || "", palette: palette };
+    return themeState;
+  }
+
   /* --- the wash, measured rather than guessed ------------------------------- */
 
   function srgbToLinear(channel) {
@@ -2064,7 +2383,10 @@
      * the crop is a function of the window's shape, so a maximised window has to
      * re-fit, and re-fitting is two numbers of arithmetic.
      */
-    loadSettings(false).then(function (loaded) { applyBackground(loaded); });
+    loadSettings(false).then(function (loaded) {
+      applyTheme(loaded);
+      applyBackground(loaded);
+    });
     window.addEventListener("resize", onBackgroundResize);
 
     tunnelStore.refresh();
@@ -2140,6 +2462,13 @@
     saveSettings: saveSettings,
     applyBackground: applyBackground,
     previewBackground: previewBackground,
+    applyTheme: applyTheme,
+    derivePalette: derivePalette,
+    themeFit: themeFit,
+    hexToRgb: hexToRgb,
+    rgbToHsl: rgbToHsl,
+    THEME_TOKENS: THEME_TOKENS,
+    get theme() { return themeState; },
     fitBackground: fitBackground,
     suggestDarkness: suggestDarkness,
     backgroundUrl: backgroundUrl,

@@ -1599,6 +1599,42 @@
         "</div></div>" +
         '<div><button type="button" class="btn btn--ghost" id="set-bgclear">' +
         icon("cross", "icon--sm") + "恢复内置背景</button></div>" +
+        /*
+         * 主题配色.
+         *
+         * One colour, not a palette editor. The interface is one hue with a fixed set of
+         * saturations and lightnesses — that is what makes its contrast ratios hold — so
+         * what a user actually wants to change is *which hue*, and everything else has to
+         * follow or the text stops being readable. See `derivePalette` in app.js for the
+         * relationships and where the numbers came from.
+         *
+         * 强调色 is separate because "I like this board but not that orange" is a real
+         * request, and because a board that is nearly grey has no hue to derive an accent
+         * from — that theme gets brightness for its accent instead.
+         */
+        '<div class="field">' +
+        '<div class="bg-label-row"><label class="label" for="set-theme">主题配色</label>' +
+        pill("set-theme-state", "down", "内置配色") + "</div>" +
+        '<div class="theme-pick">' +
+        '<input type="color" class="color-well" id="set-theme" value="#4a0a10" aria-label="主题底色">' +
+        '<input class="input input--mono theme-hex" id="set-theme-hex" type="text" autocomplete="off" ' +
+        'spellcheck="false" maxlength="7" placeholder="#4a0a10">' +
+        '<button type="button" class="btn btn--ghost btn--small" id="set-theme-reset">' +
+        icon("refresh", "icon--sm") + "跟随内置配色</button>" +
+        "</div>" +
+        '<p class="section-note bg-hint" id="set-theme-note"></p>' +
+        "</div>" +
+        '<div class="field">' +
+        '<div class="bg-label-row"><label class="label" for="set-accent">强调色</label>' +
+        '<button type="button" class="btn btn--ghost btn--small" id="set-accent-auto">' +
+        icon("refresh", "icon--sm") + "自动</button></div>" +
+        '<div class="theme-pick">' +
+        '<input type="color" class="color-well" id="set-accent" value="#ff5a33" aria-label="强调色">' +
+        '<input class="input input--mono theme-hex" id="set-accent-hex" type="text" autocomplete="off" ' +
+        'spellcheck="false" maxlength="7" placeholder="留空 = 由底色推导">' +
+        "</div>" +
+        '<div class="theme-swatches" id="set-theme-swatches" aria-hidden="true"></div>' +
+        "</div>" +
         "</div>",
         "图片不会被复制：客户端只记住它在哪，用的时候直接读那个文件。" +
         "所以这里要的是<b>完整路径</b>——浏览器出于安全不会把拖进来的文件的路径交给我们，" +
@@ -1715,13 +1751,20 @@
       bgPath.value = loaded.background_path || "";
       adoptCrop(loaded);
 
+      themeHex.value = loaded.theme_color || "";
+      if (loaded.theme_color) themeWell.value = loaded.theme_color;
+      accentHex.value = loaded.theme_accent || "";
+      if (loaded.theme_accent) accentWell.value = loaded.theme_accent;
+
       where.innerHTML =
         "<dt>配置文件</dt><dd>" + esc(S.settingsMeta.path || "—") + "</dd>" +
         "<dt>平台 HTTP</dt><dd>" + esc(S.settingsMeta.http_backend || "—") + "</dd>";
 
       // Filling the form is also what applies it: the settings page is the only place
-      // these three numbers are edited, and a form that showed one weight while the
-      // window painted another is the bug this avoids.
+      // these numbers and colours are edited, and a form that showed one palette while
+      // the window painted another is the bug this avoids. `false` because loading the
+      // form is not the user editing it.
+      previewTheme(false);
       S.applyBackground(loaded).then(adoptBackground);
     }
 
@@ -1902,6 +1945,96 @@
         esc(live.reason || meta.reason || "原因未知");
     }
 
+    /* ------------------------------------------------ 个性化：主题配色 */
+
+    var themeWell = el.querySelector("#set-theme");
+    var themeHex = el.querySelector("#set-theme-hex");
+    var themeReset = el.querySelector("#set-theme-reset");
+    var themePill = el.querySelector("#set-theme-state");
+    var themeNote = el.querySelector("#set-theme-note");
+    var themeSwatches = el.querySelector("#set-theme-swatches");
+    var accentWell = el.querySelector("#set-accent");
+    var accentHex = el.querySelector("#set-accent-hex");
+    var accentAuto = el.querySelector("#set-accent-auto");
+
+    /* The accent the two inputs currently describe; empty means "derive it". */
+    function accentValue() {
+      var typed = accentHex.value.trim();
+      if (!typed) return "";
+      return S.hexToRgb(typed) ? typed : null;
+    }
+
+    /**
+     * Apply what the two controls say, and describe it.
+     *
+     * Live, on every keystroke and every drag in the OS colour picker: the whole point of
+     * this control is that the user can see the interface in the colour before deciding
+     * to keep it, and a preview that needs a save to appear is a preview nobody uses.
+     */
+    function previewTheme(dirty) {
+      var typed = themeHex.value.trim();
+      if (!typed) {
+        S.applyTheme({});
+        setPill(themePill, "down", "内置配色");
+        themeNote.innerHTML = "正在使用内置配色。选一个颜色，整套界面——底色、卡片、边框、" +
+          "四级文字、强调色——都由它推导出来。";
+        themeSwatches.innerHTML = "";
+        if (dirty !== false) markDirty();
+        return;
+      }
+      var rgb = S.hexToRgb(typed);
+      if (!rgb) {
+        themeNote.innerHTML = "颜色要写成 <code>#RRGGBB</code>（或者 <code>#RGB</code>）。";
+        return;
+      }
+      var accent = accentValue();
+      S.applyTheme({ theme_color: typed, theme_accent: accent || "" });
+      setPill(themePill, "ok", "自定义配色");
+
+      // The one thing the user cannot choose is how *bright* the board is: every contrast
+      // ratio in the palette is measured against a surface above it, and a pale board
+      // leaves the top text tier nowhere to go. Said out loud rather than done quietly,
+      // because the swatch and the result would otherwise disagree with no explanation.
+      var fit = S.themeFit(typed);
+      themeNote.innerHTML = fit && fit.clamped
+        ? "这个颜色对底色来说太亮了：亮度已经压到能保住正文对比度的范围（色相和饱和度仍然是你的），" +
+          "上面的色块就是实际会用的颜色。"
+        : "整套界面由这一个颜色推导，文字对比度按内置配色的标准保持。";
+
+      var palette = S.theme.palette || {};
+      var order = ["--ground", "--wash", "--plate", "--rule", "--fg-soft", "--fg", "--signal"];
+      themeSwatches.innerHTML = order.map(function (name) {
+        return '<span class="swatch" style="background:' + palette[name] + '" title="' + name + '"></span>';
+      }).join("");
+      if (dirty !== false) markDirty();
+    }
+
+    themeWell.addEventListener("input", function () {
+      themeHex.value = themeWell.value;
+      previewTheme();
+    });
+    themeHex.addEventListener("input", function () {
+      if (S.hexToRgb(themeHex.value.trim())) themeWell.value = S.hexToRgb(themeHex.value.trim()) && themeHex.value.trim();
+      previewTheme();
+    });
+    themeReset.addEventListener("click", function () {
+      themeHex.value = "";
+      previewTheme();
+    });
+
+    accentWell.addEventListener("input", function () {
+      accentHex.value = accentWell.value;
+      previewTheme();
+    });
+    accentHex.addEventListener("input", function () {
+      previewTheme();
+    });
+    accentAuto.addEventListener("click", function () {
+      accentHex.value = "";
+      previewTheme();
+    });
+
+    /** Everything that follows from the background layer having settled. */
     function adoptBackground() {
       syncCropTool();
       sayBackground();
@@ -2113,6 +2246,8 @@
         background_darkness: parseInt(bgDark.value, 10) || 0
       };
       patch.background_crop = cropPatch().background_crop;
+      patch.theme_color = themeHex.value.trim();
+      patch.theme_accent = accentHex.value.trim();
       S.saveSettings(patch).then(function (result) {
         var body = result.body || {};
         if (result.ok && body.settings) {
@@ -2128,18 +2263,22 @@
           }
         } else {
           /*
-           * A refused background is the interesting failure here, and the shell says
-           * which one it was — 找不到这个文件 / 不支持 GIF / 超过 20 MB — so it goes on
-           * screen where the field is rather than into a toast that disappears.
+           * A refused background or colour is the interesting failure here, and the
+           * shell says which one it was — 找不到这个文件 / 不支持 GIF / 超过 20 MB /
+           * 颜色要写成 #RRGGBB — so it goes on screen next to the field rather than into
+           * a toast that disappears.
            */
           setPill(state, "down", "保存失败");
           var why = errorText(body);
           S.toast("保存失败：" + why, "warn");
-          bgWhy.innerHTML = esc(why);
-          // Nothing was written, so the live preview goes back to what is stored —
-          // but only the *layer*: `adoptBackground` would also rewrite the line above
-          // with the current state's sentence, and the sentence the user needs right
-          // now is the one saying why their path was refused.
+          if (body.field === "background_path") bgWhy.innerHTML = esc(why);
+          else themeNote.innerHTML = esc(why);
+          // Nothing was written, so both live previews go back to what is stored — but
+          // only the *layer*: `adoptBackground` would also rewrite the background line
+          // with the current state's sentence, and the sentence the user needs right now
+          // is the one saying why their path was refused.
+          S.applyTheme(S.settings);
+          previewTheme(false);
           S.applyBackground(S.settings).then(syncCropTool);
         }
       }).catch(function (err) {
