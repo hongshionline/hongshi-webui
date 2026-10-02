@@ -1,14 +1,957 @@
 /*
  * hongshi shell — page components.
  *
- * Split from main.css only by subject, not by rule: the tokens, greys, red and
- * text opacities all come from there. Nothing here invents a colour.
+ * Split from main.css only by subject, not by rule: the tokens, the three greys,
+ * the fire palette and the text opacities all come from there. Nothing here
+ * invents a colour.
+ *
+ * One rule from main.css is worth repeating because it decides most of what
+ * follows: a fire colour is never text on a grey surface. It is a fill, a border,
+ * an indicator or a graphic. Words stay white and retreat by opacity.
  */
+
+/* ------------------------------------------------------------- 联机 (a room) */
+
+/* One decision and one button, centred.
+ *
+ * The page is a single column with a max width, and the max width is the point: the
+ * old page was a form stretched to the board's full 1080px, which is why it read as
+ * paperwork. Two controls and a button do not need a form's width, and giving them a
+ * narrow column is what makes them look like the one thing the page is for. */
+.room {
+  max-width: 620px;
+  margin: 0 auto;
+  padding-top: clamp(8px, 4vh, 48px);
+}
+
+.room-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  margin-bottom: 34px;
+}
+
+.room-hero-icon {
+  width: 56px;
+  height: 56px;
+  /* The mark is a raster icon, not a glyph, so this box is a background holder rather
+     than a coloured SVG host — same treatment as `.brand` in the top bar, one size up.
+     `border-radius` because icon.png is a square block of artwork and a circle-or-square
+     edge is what makes it read as an app icon instead of a floating picture. */
+  border-radius: 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.room-hero-mark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.room-hero-title {
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  /* White, and it stays white: the heading is the product name, not the accent. */
+  color: var(--fg);
+}
+
+/* The two controls side by side, stacking on a narrow window. */
+.room-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 560px) {
+  .room-controls { grid-template-columns: minmax(0, 1fr); }
+}
+
+.room-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.room-label {
+  font-size: 13px;
+  color: var(--fg-soft);
+}
+
+.room-select { position: relative; }
+
+/* The trigger is an `.input`, so it inherits the field's height, radius and border,
+   and only has to add the row layout. The list is the shared `.picker-list`, which
+   `position: absolute` inside this wrapper already positions. */
+.room-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--fg);
+}
+
+.room-trigger .picker-text { flex: 1 1 auto; min-width: 0; }
+
+/* The stability reading: a dot and a phrase, and the phrase takes the dot's colour.
+   That is the one place in this system where a colour carries meaning in text, and it
+   is deliberate — a green dot with neutral grey words beside it reads as decoration,
+   while 「延迟稳定」in green reads as a reading about the node the user is about to
+   share through. See `relayReading()` in pages.js for the four states. */
+.room-reading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: 12.5px;
+  white-space: nowrap;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--wash);
+}
+
+.room-reading[data-tone="ok"] { color: var(--ok); }
+.room-reading[data-tone="warn"] { color: var(--warn); }
+.room-reading[data-tone="down"] { color: var(--high); }
+.room-reading[data-tone="busy"] { color: var(--fg-dim); }
+
+.room-caret {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 4.5px solid transparent;
+  border-right: 4.5px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: 0.75;
+  transition: transform 0.18s var(--ease);
+}
+
+.room-trigger[aria-expanded="true"] .room-caret { transform: rotate(180deg); }
+
+.room-list {
+  /* The shared list is written for a field that already sits in a stack; here it has
+     to clear the trigger it hangs from. */
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+}
+
+.room-list .picker-option { width: 100%; }
+
+/* The stability dot, in the trigger *and* in the list rows.
+ *
+ * `data-latency`, not `data-state`: the shared `.dot` in main.css is keyed on that
+ * attribute. Writing `data-state` first silently did nothing — the dot fell back to
+ * `.dot`'s own `--dead`, so every node looked unreachable while the words beside it
+ * said 「延迟稳定」.
+ *
+ * Scoped to `.room`, not to `.room-list`: the first version was `.room-list .dot` and
+ * the trigger's own dot is not inside the list, so the closed button showed the
+ * fallback colour while the open list showed the right one. The two dots are the same
+ * control in two states and have to be styled by the same rule. */
+.room .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: none;
+  /* The shared 9px box is one pixel larger than this row's text wants. */
+  margin: 0;
+  background: var(--fg-dim);
+}
+
+.room .dot[data-latency="ok"] { background: var(--ok); }
+.room .dot[data-latency="warn"] { background: var(--warn); }
+.room .dot[data-latency="down"] { background: var(--high); }
+.room .dot[data-latency="busy"] { background: var(--fg-dim); }
+
+/* The reading beside the dot in a list row, in the same three colours. */
+.room-list .picker-meta .room-reading {
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  gap: 5px;
+}
+
+/* The download button that comes with the "no kernel" notice. It sits under the notice
+   and is centred with it, because it is the notice's action rather than the page's
+   primary one — 开启房间 is disabled behind it, so the two never compete. */
+.room-kernel-download {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  justify-content: center;
+  margin-top: 10px;
+  height: 42px;
+  border-radius: 999px;
+}
+
+.room-hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-dim);
+  min-height: 19px;
+}
+
+/* The way back to the explanation, for the second run — the first run has the guide
+   standing next to this field. A link and not a button: it leaves the page rather than
+   doing something to it, and it must not compete with 开启房间 for attention. */
+.room-link {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--signal-hot);
+  text-underline-offset: 3px;
+}
+
+.room-link:hover { color: var(--fg); }
+
+/* Two of them under an open room — "what do I tell my friend" and "he says it does not
+   work" — so they wrap instead of running into one long sentence. */
+.room-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 8px 0 0;
+}
+
+.room-links .room-link { margin-top: 0; }
+
+/* The port field and its re-detect button on one row.
+ *
+ * The button is a discovery action, so it is a *secondary* control: one square at the
+ * field's own height, holding one glyph. It has been through two other shapes. A
+ * full-height text button was wide enough to squeeze the field it belongs to; then a 28px
+ * pill reading 重新探测 fixed the width and left a small control sitting next to a large
+ * one, which is the thing that looks wrong no matter how the row is arranged — matching a
+ * 44px field with a 44px field's worth of text is what squeezes the row in the first place.
+ * At 44px square it lines up with the field, costs 44px of the row, and reads as an action
+ * *on the field beside it* rather than as a second thing to read.
+ *
+ * The word it lost is not lost from the page: the hint under the field says where the port
+ * came from, and when nothing was found it says to press the refresh button — which is the
+ * fact the label was carrying. The label itself survives as `aria-label`, because a glyph
+ * has nothing for a screen reader to read. */
+.room-port-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.room-port-row .input { flex: 1 1 auto; min-width: 0; }
+
+.room-redetect {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.room-redetect svg { width: 16px; height: 16px; }
+
+.room-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+  margin-top: 26px;
+  height: 50px;
+  border-radius: 999px;
+  font-size: 16px;
+  /* One `drop-shadow` in the whole page, and this is it: the primary action is the
+     only element on the board that is supposed to look lifted. */
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.35));
+}
+
+/* Running: the address is the content, so it gets the size and the weight. */
+.room-running { display: flex; flex-direction: column; gap: 12px; }
+
+.room-address {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.room-address-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  height: 56px;
+  font-family: var(--font-mono);
+  font-size: clamp(16px, 2.1vw, 21px);
+  letter-spacing: 0.01em;
+  color: var(--fg);
+  background: var(--wash);
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  overflow-wrap: anywhere;
+}
+
+.room-address-value.is-empty {
+  color: var(--fg-dim);
+  font-size: 15px;
+}
+
+.room-copy {
+  flex: none;
+  height: 56px;
+  padding: 0 20px;
+  border-radius: 14px;
+  gap: 8px;
+}
+
+.room-copy svg { width: 17px; height: 17px; }
+
+/* ------------------------------------------------------------------ dialogs */
+/*
+ * One dialog, three uses: the room address, the new-version notice, and the first-run
+ * guide. They share these classes rather than each carrying their own copy, because
+ * three near-identical overlays is how a design system ends up with three different
+ * corner radii and two of them wrong.
+ *
+ * A dialog is a *sheet over the board*, not a page: the backdrop dims and blurs what is
+ * behind it so the thing being said has no competition, and every dialog closes on
+ * Escape and on a click on the backdrop, which is what makes them not feel like a trap.
+ */
+.dlg-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(20, 3, 6, 0.66);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: dlg-fade 0.18s var(--ease) both;
+}
+
+@keyframes dlg-fade {
+  from { opacity: 0; }
+}
+
+.dlg {
+  width: min(520px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 26px 26px 22px;
+  background: var(--plate);
+  border: 1px solid var(--rule);
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  animation: dlg-rise 0.22s var(--ease-rise) both;
+}
+
+/* Wider, for a dialog that has a picture or a diagram in it. */
+.dlg--wide { width: min(640px, 100%); }
+
+@keyframes dlg-rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+}
+
+.dlg-title {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.dlg p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--fg-soft);
+}
+
+.dlg-note {
+  font-size: 12.5px;
+  color: var(--fg-dim);
+}
+
+.dlg-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.dlg-actions .btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+}
+
+.dlg-actions svg { width: 16px; height: 16px; }
+
+/* ------------------------------------------------------------------ guide */
+/*
+ * The first-run guide is a spotlight: everything dimmed, one real control lifted out of
+ * the dim, one sentence beside it.
+ *
+ * The overlay itself is `pointer-events: none`, which is the decision the whole thing
+ * turns on. The user is being told to click the real 联机 link and the real 开启房间
+ * button, so the page underneath has to stay live; the dimming is done by a shadow rather
+ * than by a paint, and a shadow never intercepts a click. Nothing here is an input target
+ * except the card (which holds the two buttons), so every click on the ring lands on the
+ * control inside it and not on a picture of it.
+ *
+ * "Click anywhere else and the guide is over" therefore cannot be a listener on this
+ * layer — it never receives a click. It is a listener on the document; see `showGuide`.
+ */
+.guide {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  pointer-events: none;
+}
+
+/*
+ * The hole, drawn as a shadow.
+ *
+ * A huge `box-shadow` spread is how a rectangle with rounded corners becomes a hole: the
+ * element is transparent and only its shadow paints, so the dimming takes the shape of the
+ * box including its radius. Four separate divs were the other option and they cannot make
+ * a rounded corner.
+ */
+.guide-ring {
+  position: fixed;
+  border-radius: 12px;
+  pointer-events: none;
+  box-shadow: 0 0 0 3px var(--signal), 0 0 0 9999px rgba(20, 3, 6, 0.72);
+  transition: top 0.22s var(--ease), left 0.22s var(--ease),
+    width 0.22s var(--ease), height 0.22s var(--ease);
+}
+
+/* The card is the one live part of the overlay: it carries 跳过 and 知道了. */
+.guide-card {
+  position: fixed;
+  padding: 14px 16px 12px;
+  background: var(--plate);
+  border: 1px solid var(--signal);
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  transition: top 0.22s var(--ease), left 0.22s var(--ease);
+}
+
+.guide-text {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--fg);
+}
+
+.guide-link {
+  color: var(--signal-hot);
+  text-underline-offset: 3px;
+}
+
+.guide-link:hover { color: var(--fg); }
+
+.guide-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.guide-count {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+/* 跳过, at the card's bottom-right — the corner furthest from whatever the card is
+   pointing at, so the one control that ends the tour is never under the user's cursor
+   when they are reaching for the highlighted thing. */
+.guide-skip {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg-soft);
+  cursor: pointer;
+  transition: color 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+
+.guide-skip:hover { color: var(--fg); border-color: var(--edge); }
+
+/* The step that has nothing to click says so with a button instead. Accent-filled, because
+   on that step it *is* the action, and sitting left of 跳过 so the deliberate control is
+   the one closer to the text. */
+.guide-next {
+  appearance: none;
+  background: var(--signal);
+  border: 1px solid var(--signal);
+  border-radius: 999px;
+  padding: 4px 14px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--on-signal);
+  cursor: pointer;
+  transition: background-color 0.16s var(--ease);
+}
+
+.guide-next:hover { background: var(--signal-hot); border-color: var(--signal-hot); }
+
+@media (prefers-reduced-motion: reduce) {
+  .guide-ring,
+  .guide-card { transition: none; }
+}
+
+.dlg-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: color 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+
+.dlg-close:hover { color: var(--fg); border-color: var(--rule); }
+
+/* A dialog holds the board still. Without this a scroll wheel over the backdrop scrolls
+   the page underneath, so the dialog appears to drift while the user reads it. */
+html.has-dialog,
+html.has-dialog body {
+  overflow: hidden;
+}
+
+.dlg { position: relative; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dlg-overlay,
+  .dlg { animation: none; }
+}
+
+/* The address, in the one dialog that hands one over. */
+.dlg-addr {
+  padding: 15px 18px;
+  font-family: var(--font-mono);
+  font-size: clamp(17px, 2.4vw, 23px);
+  text-align: center;
+  color: var(--fg);
+  background: var(--wash);
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  overflow-wrap: anywhere;
+}
+
+/* Pending: the address is not here yet, and the box has to say so without looking
+   like a failure. Dimmed and in the interface face rather than the mono one, because
+   there is no address to be monospaced. The pulse is the only looping animation in the
+   client and it is here on purpose: a static "正在分配地址…" is indistinguishable from
+   a page that has stopped working. */
+.dlg-addr.is-pending {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  color: var(--fg-dim);
+  animation: dlg-pulse 1.6s var(--ease) infinite;
+}
+
+@keyframes dlg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.dlg-addr.is-failed {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  color: var(--high);
+}
+
+/* --------------------------------------------------------- home: heat + games */
+
+/* The heading is a label on a board, not a page title.
+ *
+ * 首页 used to open with `pageHead("首页", "…")`: the name of the tab you were
+ * already looking at, over a sentence describing the board already on screen. Both
+ * were furniture in the most expensive place on the page. A calendar glyph and the
+ * section's own name say the same thing in one line and cost 40px instead of 90.
+ *
+ * The glyph is inline SVG rather than `icons.svg#i-…` because there is no calendar
+ * symbol in the sprite, and it is the only icon on the page — one or two more and
+ * they belong in the sprite with the rest. */
+.board-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.board-icon {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  color: var(--calendar);
+}
+
+.board-icon svg { width: 100%; height: 100%; display: block; }
+
+.board-title {
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+/* The board's one job above the fold: how much you played, and what there is to
+   play. A grid rather than a flex row so the card column can be told to take a
+   fixed share instead of sizing to its content — a screenshot set as a background
+   has no intrinsic width, and a flex item sized by its content would collapse.
+   
+   The calendar keeps the larger half. It was briefly the other way round, on the
+   theory that the calendar stops growing once its 18 columns are laid out while the
+   card is artwork that fills anything; in practice the calendar is what the board is
+   for, and a wider card only ever means more screenshot. */
+.home-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.82fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+@media (max-width: 900px) {
+  .home-top { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ------------------------------------------------------------- heat calendar */
+
+.heat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px 20px 16px;
+  background: var(--plate);
+  border: 1px solid var(--rule);
+  border-radius: 18px;
+}
+
+/* Shown until the history arrives, and in place of the graph when the read failed.
+   A sentence rather than an empty box: the card is 400px wide and a blank plate reads
+   as a broken layout, while "还没有记录" reads as a fact about the account. */
+.heat-empty {
+  margin: 0;
+  padding: 22px 0;
+  font-size: 13px;
+  color: var(--fg-dim);
+}
+
+.heat-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* The figures are the sentence. A month name and a total set larger than the
+   cells they describe, because "12 天" is the answer and the grid is the
+   evidence — the calendar-as-hero mistake is the other way round. */
+.heat-figures { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+
+.heat-total {
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.heat-total b {
+  /* Numerals carry the emphasis, not the unit: "12 天" with the 12 at full white
+     and the 天 at 60% reads as a number, where both at 100% read as a label. */
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.heat-total span { color: var(--fg-soft); font-weight: 400; }
+
+.heat-sub {
+  font-size: 12.5px;
+  color: var(--fg-soft);
+  line-height: 1.35;
+}
+
+.heat-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+/* The grid scrolls horizontally when it has to rather than squeezing cells to
+   sub-pixel widths: a contribution graph whose cells are 3px wide is a texture,
+   not a calendar. An 18-week window is 12px × 18 + gaps ≈ 267px, which fits the
+   card on a desktop and scrolls on a phone.
+
+   `.heat-track` is the one element that has to be as wide as the graph, because
+   the month row is absolutely positioned inside it — a row of normal spans could
+   not line up with the columns below it, and 126 of them (one per week, mostly
+   empty) pushed the five that carry text off the right edge of the card. */
+.heat-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+.heat-track {
+  position: relative;
+  width: max-content;
+}
+
+.heat-months {
+  position: relative;
+  height: 15px;
+  /* The weekday gutter, so the labels start on the first week column rather than
+     over the day names. Two short of the column stride on purpose: the labels are
+     right-aligned inside a 15px box, so this lines "一" up with the cells' left edge
+     rather than with the box. */
+  margin-left: 20px;
+}
+
+.heat-month {
+  position: absolute;
+  top: 0;
+  font-size: 11px;
+  color: var(--fg-soft);
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.heat-body {
+  display: flex;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.heat-days {
+  display: grid;
+  grid-template-rows: repeat(7, 10px);
+  gap: 3px;
+  width: 15px;
+  flex: none;
+}
+
+.heat-day {
+  font-size: 9.5px;
+  line-height: 10px;
+  color: var(--fg-dim);
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Columns, not a 7-row grid laid out row-major: a contribution calendar is one
+   column per *week*, and building it row-major would put four consecutive days in
+   one row. */
+.heat-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, 10px);
+  gap: 3px;
+}
+
+.heat-cell {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--heat-0);
+  /* The button reset. These are buttons for the tooltip and the focus ring, not
+     for their default chrome. */
+  border: 0;
+  padding: 0;
+  cursor: default;
+  transition: transform 0.12s var(--ease), background-color 0.12s var(--ease);
+}
+
+.heat-cell[data-level="0"] { background: var(--heat-0); }
+.heat-cell[data-level="1"] { background: var(--heat-1); }
+.heat-cell[data-level="2"] { background: var(--heat-2); }
+.heat-cell[data-level="3"] { background: var(--heat-3); }
+.heat-cell[data-level="4"] { background: var(--heat-4); }
+
+/* A day with nothing on it is still a day you can point at, so it lifts on hover
+   like the rest rather than sitting inert. */
+.heat-cell:hover { transform: scale(1.35); }
+
+.heat-cell:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+
+/* Today is the one cell allowed to shout: the ring is fire, and it is a ring
+   rather than a fill so a busy day is still readable inside it. */
+.heat-cell[data-today="1"] {
+  box-shadow: 0 0 0 1.5px var(--heat-ring);
+}
+
+/* ------------------------------------------------------------ game carousel */
+
+.games {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Back to the short card now that the calendar is the wider half: at 0.82fr the
+     card is ~340px wide, and the artwork is cropped there without the card being
+     wrong — a screenshot that bleeds off the edge is what a promo card looks like.
+     The 360px floor that kept the whole image visible went with the wider layout. */
+  min-height: 260px;
+  border: 1px solid var(--rule);
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--plate);
+}
+
+.game {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.5s var(--ease), visibility 0.5s var(--ease);
+}
+
+.game[data-active="1"] { opacity: 1; visibility: visible; }
+
+/* A background image rather than an <img> because the plate has to sit *under*
+   the words at every size and a screenshot has no aspect ratio this box has to
+   respect. The scrim is what makes white text on a bright screenshot legible:
+   without it "Minecraft" lands on sky-blue at about 1.7:1.
+
+   `center top`, i.e. zero offset. The card is 597×360 (1.66:1) against 1152×649
+   artwork (1.78:1), so `cover` crops 6.6% of the height — and the game's logo sits
+   in the first pixels of it, which means any downward bias clips the lettering. At
+   zero the crop comes off the bottom, where it is grass. */
+.game-media {
+  position: absolute;
+  inset: 0;
+  background-color: var(--ground);
+  background-position: center top;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.game-media::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.86) 0%,
+    rgba(0, 0, 0, 0.62) 38%,
+    rgba(0, 0, 0, 0.12) 72%,
+    rgba(0, 0, 0, 0.02) 100%);
+}
+
+.game-body {
+  position: relative;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.game-tag {
+  align-self: flex-start;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  /* The tag is the one place fire becomes a ground, so its text is white on
+     --signal-ink rather than on a grey. */
+  background: var(--signal-ink);
+  color: var(--on-signal);
+}
+
+.game-title {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.game-note {
+  font-size: 13px;
+  /* Painted, not translucent: a white at 78% over this scrim comes out pink, and
+     the note sits on the artwork where nothing else in the palette does. */
+  color: #f4dade;
+  line-height: 1.5;
+}
+
+.game-dots {
+  position: relative;
+  display: flex;
+  gap: 6px;
+  padding: 0 20px 16px;
+}
+
+.game-dot {
+  width: 6px;
+  height: 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.38);
+  cursor: pointer;
+  transition: width 0.24s var(--ease), background-color 0.24s var(--ease);
+}
+
+.game-dot[aria-current="true"] {
+  width: 18px;
+  background: var(--signal);
+}
+
+/* One game means one dot, and a single dot is furniture. The dots are rendered
+   only when there is more than one thing to switch between. */
 
 /* ------------------------------------------------------ daily news strip */
 
 /* A grid, not a scroll strip: the section is meant to fill its width, and cards
-   that scroll sideways never look full. Two to four columns depending on room. */
+   that scroll sideways never look full. Two to four columns depending on room.
+
+   This was the top of 主页 until the games board took that place; it now sits
+   under it, and the reserved slot below it is where 资源查找 and the rest of the
+   daily content will go. */
 .news {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr));
@@ -370,7 +1313,12 @@
   margin: 0;
   padding: 6px;
   list-style: none;
-  background: var(--plate);
+  /* A recessed panel rather than a raised one: `--wash` is the one surface step below
+     `--plate`, which is what the trigger itself wears, so the list reads as a thing
+     that opened out of the control instead of a second card laid on top of it. The
+     design system has exactly one shadow and it is spent on the primary action, so
+     depth here has to come from the surface. */
+  background: var(--wash);
   border: 1px solid var(--rule);
   border-radius: 16px;
   max-height: 320px;
@@ -379,21 +1327,43 @@
 
 .picker-list[hidden] { display: none; }
 
+/* The rows are `<button>`s, so they arrive wearing the browser's button chrome:
+   `appearance: auto` paints a grey fill and a 2px `outset` white border, and no amount
+   of `border-radius` on `.picker-option` touches either. That is exactly what happened
+   — the rows were `<div>`s while this list belonged to the old page, and turning them
+   into buttons for keyboard and focus reasons brought the native look with them.
+
+   So the reset is the point of this rule, not decoration: `appearance: none` removes
+   the platform fill, and an explicit transparent `background`/`border` puts the row
+   back to a plain box that the panel's own colour shows through. `font: inherit`
+   matters for the same reason — a button does not inherit the page's font. */
 .picker-option {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   padding: 10px 12px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 10px;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
   cursor: pointer;
 }
+
+.picker-option:hover { background: var(--wash); }
 
 /* The keyboard cursor and the chosen row are different states and have to look
    different: one is where the arrow keys are, the other is what the tunnel will
    actually use. */
-.picker-option[data-active="true"] { background: rgba(255, 255, 255, 0.05); }
+.picker-option[data-active="true"] { background: var(--wash); }
 
-.picker-option[aria-selected="true"] { background: rgba(255, 255, 255, 0.07); }
+.picker-option[aria-selected="true"] { background: var(--wash); }
 
 .picker-mark {
   width: 18px;
@@ -660,3 +1630,197 @@
 }
 
 .soon-list li::marker { color: var(--red); }
+
+/* -------------------------------------------------------------------- 帮助 */
+/*
+ * The help article is a *reading* column, and it is the only page in the client that is
+ * read rather than used. That is why it is the one page with a max width of its own: a
+ * line of Chinese prose stretched across the board's full 1080px is a line nobody
+ * finishes, and the same column holds the screenshots, because a picture of a menu is
+ * scanned rather than read and does not want to be wider than the words beside it.
+ */
+.help-topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.help-topic {
+  padding: 6px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--fg-soft);
+  text-decoration: none;
+  transition: color 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+
+.help-topic:hover { color: var(--fg); border-color: var(--edge); }
+.help-topic[aria-current="page"] { color: var(--fg); border-color: var(--signal); }
+
+.help-article {
+  max-width: 760px;
+  font-size: 14.5px;
+  line-height: 1.85;
+  color: var(--fg-soft);
+}
+
+.help-article p { margin: 0 0 14px; }
+.help-article p:last-child { margin-bottom: 0; }
+
+/* Steps inside an answer. The article's own prose is a 1.85 line height, which is right for
+   a paragraph and too airy for four one-line fixes — hence the tighter rhythm here. */
+.help-article ul,
+.help-article ol { margin: 0 0 16px; padding-left: 22px; }
+
+.help-article li { margin-bottom: 7px; line-height: 1.75; }
+.help-article li:last-child { margin-bottom: 0; }
+
+/* The three self-checks at the top of the troubleshooting page: a short list, and the
+   numbers are the only thing that has to stand out. */
+.help-check { margin-bottom: 4px; }
+.help-check li::marker { color: var(--signal); font-weight: 600; }
+
+/* Emphasis inside prose has to be *brighter*, not a fire colour: the palette rule holds
+   here too, and a red highlight on a red page does not read as emphasis anyway. */
+.help-article b,
+.help-article strong { color: var(--fg); font-weight: 600; }
+
+.help-article kbd {
+  padding: 1px 7px;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--wash);
+  font: 500 12.5px/1.6 var(--font-sans);
+  color: var(--fg);
+}
+
+.help-lead { color: var(--fg-dim); }
+
+/* A step: the number is a filled dot in the accent, the sentence is ordinary prose. The
+   number is taken out of the line box (flex) so the sentence's left edge is the column's
+   left edge, which is the same alignment the section headings use. */
+.help-step {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 24px 0 12px;
+  color: var(--fg);
+}
+
+.help-step-num {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 3px;
+  border-radius: 999px;
+  background: var(--signal);
+  color: var(--on-signal);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 22px;
+  text-align: center;
+}
+
+.help-shot { margin: 0 0 22px; }
+
+.help-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+}
+
+.help-shot figcaption {
+  margin-top: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+}
+
+/* A case screenshot inside an answer is evidence, not a step to follow: it is a small
+   window showing one sentence of error text, so it is held narrower than the column and
+   the caption underneath is what actually states the message. */
+.help-shot--case { max-width: 560px; margin-top: 4px; }
+
+/* The one thing in the article that is a correction rather than a step — "that red line
+   in your chat is not a problem" — so it is a box, not another paragraph. The rule down
+   its left side is the accent, which is how this design marks a note everywhere else. */
+.help-tip {
+  margin: 0 0 18px;
+  padding: 12px 16px;
+  border-left: 3px solid var(--signal);
+  border-radius: 0 12px 12px 0;
+  background: var(--wash);
+  font-size: 13.5px;
+}
+
+.help-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 20px 0 0;
+}
+
+.help-cta .btn { text-decoration: none; }
+
+/* 较麻烦, next to the case that needs the *host* to act: the friend reading this page cannot
+   fix it alone, and that is worth knowing before they start checking their own machine. */
+.help-tag {
+  margin-left: 8px;
+  padding: 1px 9px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--warn);
+  white-space: nowrap;
+}
+
+/* Where the screenshots came from, said before the first one. Quieter than the prose it
+   introduces: it is a condition on the pictures, not part of the answer, and a reader who
+   does not need it should be able to skip it in one glance. */
+.help-sources {
+  max-width: 760px;
+  margin: 0 0 26px;
+  padding-left: 12px;
+  border-left: 2px solid var(--rule);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--fg-dim);
+}
+
+.help-sources b { color: var(--fg-soft); font-weight: 600; }
+
+/* The address in the article's own words — the one thing in the copy that is copied by
+   hand, so it is set as the monospace field the user is about to paste into. */
+.help-code {
+  padding: 1px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--wash);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg);
+}
+
+/* 常见问题 is a list of symptoms, not a sequence: each one is a question in the reader's
+   own words and the answer under it. No numbering — the order is "most likely first",
+   and a number would suggest all of them apply. */
+.help-faq-item {
+  margin: 0 0 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.help-faq-item:last-child { border-bottom: 0; padding-bottom: 0; }
+
+.help-faq-q {
+  margin: 0 0 6px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--fg);
+}

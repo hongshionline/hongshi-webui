@@ -5,101 +5,107 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <title>红石联机 · 客户端</title>
+<!-- Every reference in this file is absolute, and that is load-bearing rather than
+     tidiness: the shell serves routes more than one segment deep (`/help/port`), and on
+     that page a relative `href=main.css` resolves against `/help/` — the browser asks
+     for `/help/main.css`, gets a 404, and the page arrives with no stylesheet and no
+     script at all. `Shell.assetUrl` prefixes the slash for the same reason. (That
+     example is written without its quotes on purpose: `scripts/verify.ps1` reads every
+     href/src in this file, comments included, and refuses a relative one.) -->
 <!-- The tab's own mark. Without it the browser asks for `/favicon.ico`, which the
      shell answers 204 — a tab with a blank page icon next to every other tab. -->
-<link rel="icon" type="image/png" href="icon.png">
-<link rel="apple-touch-icon" href="icon.png">
-<link rel="stylesheet" href="main.css">
-<link rel="stylesheet" href="app.css">
+<link rel="icon" type="image/png" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="stylesheet" href="/main.css">
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
 
+<!-- The sprite, referenced once so the browser fetches it. Every icon in the app is
+     a `<use href="/icons.svg#i-…">`, and this used to be pulled in as a side effect of
+     the nav items carrying icons — which they no longer do. Without this the browser
+     only asks for the sprite when a page happens to draw an icon, so the first icon
+     on the first page would appear a moment after the rest of the page. Hidden, and
+     `aria-hidden` because it paints nothing. -->
+<svg class="sprite" aria-hidden="true" focusable="false"><use href="/icons.svg#i-home"></use></svg>
+
 <div class="app" id="app">
 
-  <!-- ------------------------------------------------------------- sidebar -->
-  <aside class="side" id="side">
-    <div class="side-head">
-      <span class="brand" id="brand" role="img" aria-label="红石联机"></span>
-      <span class="side-brand">
-        <b>红石联机</b>
-        <i>Redstone Online2</i>
-      </span>
-      <button type="button" class="side-toggle" id="side-toggle"
-              aria-label="收起侧栏" aria-expanded="true" aria-controls="side-nav">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-panel"></use></svg>
-      </button>
-    </div>
+  <!-- --------------------------------------------------------------- top bar -->
+  <!-- One bar, three zones: the mark, the destinations, the account. It replaced a
+       left sidebar, which spent 232px of every screen on four links and put the
+       destinations in a column nothing else used.
 
-    <nav class="side-nav" id="side-nav" aria-label="主导航">
-      <a class="nav-item" href="/" data-page="home">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-home"></use></svg>
-        <span class="nav-text">主页</span>
-      </a>
-      <a class="nav-item" href="/connect" data-page="connect">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-link"></use></svg>
-        <span class="nav-text">联机</span>
-      </a>
-      <a class="nav-item nav-item--soon" href="/cloud" data-page="cloud" aria-disabled="true">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-cloud"></use></svg>
-        <span class="nav-text">云存档</span>
-        <span class="nav-badge">待开放</span>
-      </a>
-      <a class="nav-item nav-item--soon" href="/hosting" data-page="hosting" aria-disabled="true">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-server"></use></svg>
-        <span class="nav-text">租聘服</span>
-        <span class="nav-badge">待开放</span>
-      </a>
-      <a class="nav-item nav-item--soon" href="/together" data-page="together" aria-disabled="true">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-people"></use></svg>
-        <span class="nav-text">一起玩</span>
-        <span class="nav-badge">待开放</span>
-      </a>
-      <a class="nav-item" href="/settings" data-page="settings">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-setting"></use></svg>
-        <span class="nav-text">设置</span>
-      </a>
+       The mark is the icon alone and the destinations are words alone. Both halves
+       were icon-plus-label and neither earned the second part: the icon already
+       draws the brand, and the four labels are two characters each, so a glyph
+       beside them was decoration that ate the horizontal room the bar needs. -->
+  <header class="topbar" id="topbar">
+    <a class="topmark" href="/" data-page="home" aria-label="红石联机 首页">
+      <span class="brand" id="brand" role="img" aria-label="红石联机"></span>
+    </a>
+
+    <nav class="topnav" id="topnav" aria-label="主导航">
+      <a class="nav-item" href="/" data-page="home">首页</a>
+      <a class="nav-item" href="/connect" data-page="connect">联机</a>
+      <a class="nav-item" href="/together" data-page="together" aria-disabled="true">一起玩</a>
+      <a class="nav-item" href="/settings" data-page="settings">设置</a>
     </nav>
 
-    <div class="side-foot">
-      <!-- Collapsed, this is just the status dot; expanded it carries the words.
-           A dot with no label still says something on a rail, which is the point. -->
-      <span class="pill" id="link-state" data-state="pending" title="正在连接">
-        <span class="pill-dot"></span><span class="pill-text" id="link-text">连接中…</span>
-      </span>
-      <button type="button" class="side-quit" id="action-quit" title="退出客户端">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-power"></use></svg>
-        <span class="nav-text">退出客户端</span>
+    <div class="topbar-right">
+      <!-- The account slot. Nothing behind it yet; it draws the empty-avatar
+           state so the bar's geometry is final before the page exists.
+
+           The log panel's switch used to sit beside it. It is gone from the bar:
+           it was a second control for a panel that every page already opens
+           through 查看日志, and the bar is where the screen is narrowest. The
+           panel is opened by `Shell.drawerOpen(true)` from a page, and closed
+           with Escape or by navigating — see `drawerOpen` in app.js. -->
+      <button type="button" class="account" id="account" aria-label="个人中心（尚未开放）"
+              aria-disabled="true" title="个人中心（尚未开放）">
+        <span class="avatar" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+               stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="8.5" r="3.6"></circle>
+            <path d="M4.8 20c0-3.6 3.2-6 7.2-6s7.2 2.4 7.2 6"></path>
+          </svg>
+        </span>
       </button>
     </div>
-  </aside>
+  </header>
 
   <!-- ---------------------------------------------------------------- main -->
   <main class="main" id="main" tabindex="-1">
-    <!-- The log panel's switch. It is here rather than inside `.page` because the
-         router empties that element on every navigation, and rather than in the
-         drawer because a control that disappears with the thing it opens is no use
-         when the thing is open. Opposite corner, same shape as the sidebar's. -->
-    <button type="button" class="panel-toggle" id="log-toggle"
-            aria-label="展开日志" aria-expanded="false" aria-controls="drawer" title="日志">
-      <svg class="icon" aria-hidden="true"><use href="icons.svg#i-console"></use></svg>
-    </button>
     <div class="page" id="page" aria-live="polite"></div>
   </main>
+
+  <footer class="statusbar">
+    <!-- Collapsed to a dot on a narrow bar, this still says something, which is
+         the point: a status light with no words next to a full sentence is two
+         ways of saying the same thing. -->
+    <span class="pill" id="link-state" data-state="pending" title="正在连接">
+      <span class="pill-dot"></span><span class="pill-text" id="link-text">连接中…</span>
+    </span>
+    <button type="button" class="statusbar-quit" id="action-quit" title="退出客户端">
+      <svg class="icon icon--sm" aria-hidden="true"><use href="/icons.svg#i-power"></use></svg>
+      <span>退出客户端</span>
+    </button>
+  </footer>
 </div>
 
 <!-- Log panel: a drawer on wide screens, full width when the window is narrow.
      Outside the page container so switching pages does not destroy a running
      tunnel's log.
 
-     There is no close button in the header, on purpose: the switch at the top of the
-     board is already there whether this panel is open or shut, and two controls doing
+     There is no close button in the header, on purpose: the switch in the top bar
+     is already there whether this panel is open or shut, and two controls doing
      the same thing a few pixels apart read as one control that is broken. The broom
      stays, because clearing is a different action from closing. -->
 <section class="drawer" id="drawer" hidden aria-label="隧道日志">
   <header class="drawer-head">
     <h2>隧道日志</h2>    <div class="drawer-tools">
       <button type="button" class="icon-btn" id="drawer-clear" title="清空日志" aria-label="清空日志">
-        <svg class="icon" aria-hidden="true"><use href="icons.svg#i-broom"></use></svg>
+        <svg class="icon" aria-hidden="true"><use href="/icons.svg#i-broom"></use></svg>
       </button>
     </div>
   </header>
@@ -108,7 +114,7 @@
 
 <p class="toast" id="toast" role="status" aria-live="polite" hidden></p>
 
-<script src="app.js"></script>
-<script src="pages.js"></script>
+<script src="/app.js"></script>
+<script src="/pages.js"></script>
 </body>
 </html>

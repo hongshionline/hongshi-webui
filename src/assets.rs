@@ -30,6 +30,108 @@ pub const EMBEDDED: &[(&str, &str, &str)] = &[
 /// `include_bytes!` and `include_str!` cannot share a table.
 pub const EMBEDDED_BINARY: &[(&str, &str, &[u8])] = &[
     ("/icon.png", "image/png", include_bytes!("../web/icon.png")),
+    // 首页的游戏宣传图。Discord 上的这张 key art 是 648×648 的正方形，而卡片槽是
+    // 一块宽广告位，所以切线在构建前就做完了（裁掉纯天空的上半、把 logo 单独贴回
+    // 左上角），仓库里存的是成品：一张 1152×649 的主图。
+    //
+    // 另有 640×360 的缩略图和 864×864 的原图，都在 `artwork/`：没有任何代码请求它们，
+    // 而 `web/asset/` 是**浏览器能取到的文件集合**、其中每个文件又都 include_bytes! 进
+    // 二进制 —— 一张没人取的文件就是所有用户的下载体积。这条规矩现在是 verify.ps1 里
+    // 的一条检查（asset/ 下每个文件都必须被某处引用）。
+    //
+    // WebP 而不是 JPEG 源文件：同一张图 q82 下 98 KB 对 172 KB，而这个二进制是要
+    // 下载两次的（桌面与 Android 各一次）。`content_type_for` 本来就有 image/webp，
+    // 三个主流内核从 2020 年起都支持，所以没有留 JPEG 回退的必要。
+    (
+        "/asset/hero-minecraft.webp",
+        "image/webp",
+        include_bytes!("../web/asset/hero-minecraft.webp"),
+    ),
+    // 窗口底图：一张 1920×1080 的低多边形火山场景，作为 `body` 的固定背景铺满整窗。
+    //
+    // 原图是 216 KB 的 PNG，而它的 alpha 通道**每一个像素都是 255** —— 25% 的体积
+    // 花在一个从没用过的通道上。转 WebP 后 16.8 KB，少了 92%，而画面是暗部低对比度的
+    // 贴图，压缩损失看不出来。原 PNG 留在 `artwork/` 里做源文件，不进二进制，也不在
+    // 被服务的目录里。
+    (
+        "/asset/lowpoly.webp",
+        "image/webp",
+        include_bytes!("../web/asset/lowpoly.webp"),
+    ),
+    // 帮助页《什么是游戏端口》的三张操作截图：ESC 菜单、世界选项里的多人游戏设置、
+    // 以及聊天框报出端口的那一行。
+    //
+    // 这一页是给人「照着做」的，图片必须随二进制走 —— 它和主界面一样只依赖回环，
+    // 不能去外网取图。原 PNG（1.5 MB / 0.6 MB / 15.6 MB）不进仓库：前两张是随手截的
+    // 屏幕，第三张是 3840×2054 的原生截图，留在仓库里只会让 clone 变慢，而它们随时
+    // 可以再截一次。仓库里存的是切好的成品，三张加起来 176 KB。
+    (
+        "/asset/help-port-menu.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-port-menu.webp"),
+    ),
+    (
+        "/asset/help-port-lan.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-port-lan.webp"),
+    ),
+    (
+        "/asset/help-port-chat.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-port-chat.webp"),
+    ),
+    // 《朋友怎么加入房间》的三张：主界面（左下角写着版本与模组数）、多人游戏界面、
+    // 直接连接输入地址。同样是切好的成品，原 PNG（1.9 / 1.1 / 1.0 MB）不进仓库。
+    (
+        "/asset/help-join-main.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-join-main.webp"),
+    ),
+    (
+        "/asset/help-join-multiplayer.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-join-multiplayer.webp"),
+    ),
+    (
+        "/asset/help-join-direct.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-join-direct.webp"),
+    ),
+    // 《朋友连不上怎么办》的六张报错截图，从团队早先那份 `常见问题.pdf`（7 页 PPT）里
+    // 抽出来的。尺寸本来就是原图大小（856×512 等），只有 1920×1080 那张缩到了 1280。
+    //
+    // 它们是 JPEG 再编码的，所以质量取 88 而不是别处的 80：这已经是第二代了，而报错文字
+    // 压在花花绿绿的画面上，低质量最先糊掉的就是那几个字（而那几个字正是整页的入口）。
+    (
+        "/asset/help-trouble-refused.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-trouble-refused.webp"),
+    ),
+    (
+        "/asset/help-trouble-lost.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-trouble-lost.webp"),
+    ),
+    (
+        "/asset/help-trouble-signature.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-trouble-signature.webp"),
+    ),
+    (
+        "/asset/help-trouble-registry.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-trouble-registry.webp"),
+    ),
+    (
+        "/asset/help-trouble-auth.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-trouble-auth.webp"),
+    ),
+    (
+        "/asset/help-trouble-unknownhost.webp",
+        "image/webp",
+        include_bytes!("../web/asset/help-trouble-unknownhost.webp"),
+    ),
     // The Latin subset of Nunito, a variable 400-700 face, 38 KB. Latin only on
     // purpose: the UI's Chinese comes from the face below, so this never has to be
     // re-cut when the copy changes, and `unicode-range` is not needed because the file

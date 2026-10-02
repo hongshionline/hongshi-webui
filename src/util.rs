@@ -86,6 +86,17 @@ pub fn iso8601_from(secs: u64) -> String {
     )
 }
 
+/// `YYYY-MM-DD` for a day number (days since the epoch), UTC.
+///
+/// The calendar in [`crate::sessions`] buckets by whole days and needs a label for
+/// each, which is the day part of [`iso8601_from`] without the time — written as its
+/// own function because carrying a `T00:00:00Z` around to slice it off again is how
+/// two date formats end up in one payload.
+pub fn date_from_days(days: i64) -> String {
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
 /// Howard Hinnant's `civil_from_days`: days since 1970-01-01 -> (y, m, d).
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;

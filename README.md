@@ -4,7 +4,7 @@ The official WebUI shell for the hongshi kernel: **a local server plus your own 
 
 Double-click it and it starts a server on `127.0.0.1`, opens the page in whatever browser you
 already use, and from there you drive the tunnel. There is no bundled webview and no Chromium —
-that is most of why the release binary is 1.4 MB and why the interface can be developed by editing
+that is most of why the release binary is 2.3 MB and why the interface can be developed by editing
 HTML and pressing F5.
 
 ```
@@ -35,26 +35,236 @@ are what the binary you download uses, and this crate is still at zero dependenc
 
 ## The interface
 
-Chinese, with a left sidebar that collapses to an icon rail (remembered in `localStorage`):
+Chinese, with a **top bar**: the mark alone on the left (which links home), the destinations in the
+middle as **words only** with the current one underlined, and the account slot on the right. Quit
+and the connection pill sit in a small status bar under the board.
+
+Both halves of the bar lost something on purpose. The mark used to carry 红石联机 / Redstone Online2
+beside the icon and the destinations used to carry a glyph before every two-character label; the
+icon already draws the brand and the words are already two characters, so both second parts were
+decoration taking up the horizontal room the bar needs.
+
+The log panel has **no switch in the bar** any more. It opens from the page that needs it (查看日志
+on 联机) and closes with Escape, which `drawerOpen` installs a document-level listener for.
+
+The bar replaced a left sidebar that collapsed to an icon rail with its state in `localStorage`.
+Four destinations did not earn 232px of every screen, and the rail's collapsed state was a
+preference worth remembering only because the layout made it one.
 
 | Destination | State |
 |---|---|
-| 主页 | Minecraft 资讯 first, then 服务 (the tunnel, 云硬盘, 云服务器 as sibling cards), then 当前会话 |
-| 联机 | local port, forwarding mode and protocol side by side, the relay picker, the tunnel card and the log |
-| 云存档 · 租聘服 · 一起玩 | placeholders that say 此功能暂不对外开放 and tag the icon 实验性 |
+| 首页 | a games board: a contribution heat map of time played on the left, a rotating game card on the right. Headed 游戏日历 with a calendar glyph rather than by a page title |
+| 联机 | **one decision and one button**: pick a relay (with a stability reading), accept the detected port, press 开启房间. The address is handed over in a dialog |
+| 一起玩 | a placeholder that says 此功能暂不对外开放 |
 | 设置 | service address, proxy, node-cache lifetime, default port, and 关于 (version, update check, download) |
 
-The tunnel is **not a destination of its own**: it is one of the three services in 主页's 服务
-section, sharing the card shape the other two use, because that is how the product is billed. Only
-联机 has a page dedicated to driving it.
+云存档 and 租聘服 are still real routes and still render their placeholder page, but they no
+longer have a link in the bar: 一起玩 is the one unbuilt destination a player is meant to see.
+
+**帮助 is not in the bar either, and that is a decision.** Every question in it is reached from the place
+that raises it: 什么是游戏端口？ under the port field on 联机 (and in the first-run guide), 朋友怎么加入房间？
+and 常见问题：朋友连不上怎么办？ under the address once a room is open — which is the only moment those two
+questions exist. A fifth tab would be a place to *browse*; these are places to *land*, one click after
+something blocked the user, and the four things in the bar are all destinations.
+
+`/help` is the page and `/help/<slug>` is a question in it. Every question is one entry in `HELP_TOPICS`
+plus one article function in [`pages.js`](web/pages.js) — a slug, a name, a one-line blurb, whether it
+has screenshots, and the article — so the second and third question were data edits rather than
+rewrites. The row of topic chips renders only once there is more than one question, which is now the
+case; before, a tab bar with a single tab was furniture.
+
+**什么是游戏端口** answers in three parts, and the middle one is the part somebody follows with the game
+open on the other monitor:
+
+1. what a port is — IP is the building, the port is which room; a LAN world is visible only to the same
+   Wi-Fi, and the tunnel is what puts it somewhere a friend can reach;
+2. how to see your own — ESC → 世界选项… → set 多人游戏 to 局域网 → 应用更改. One screenshot per step,
+   taken from a real session;
+3. where to put it, with a button back to 联机.
+
+It also says the thing that line of chat makes people worry about: the red 「无法转发端口 … 路由器上未启用
+UPnP」 printed right under the port is the *game* failing to punch its own hole, and it is not a problem
+here — this client relays through a server instead of forwarding a port.
+
+**朋友怎么加入房间** is written for the friend, not the host, because the host never sees those three
+screens — the host forwards the link, or forwards the address and reads it out. Three steps (多人游戏 →
+直接连接 → paste the address → 加入服务器), and then the two facts that cause most of the failures: the
+address is *two* halves (`cd.hongshi.site:27913` — the part after the colon is this room's port, and
+dropping it is the most common mistake), and the room only exists while 红石 is showing that address.
+Its second half is about the window in which the room is up: closing it, exiting the world, sleeping
+the machine and losing the network all end the same way for the friend on the other side, and a reopened
+room has a *new* address.
+
+**朋友连不上怎么办** is written backwards from the screen: somebody opens it with a game window behind it
+showing one sentence, so every case leads with **that sentence verbatim** in the monospace face the game
+uses — `Connection refused: getsockopt`, `Unknown host`, `无效的玩家档案公钥签名` — and only then says
+what it means. The order is by frequency, and the one case that needs the *host* to act carries a 较麻烦
+tag, because the friend reading the page cannot fix that one alone.
+
+The cases themselves came from the support deck the team kept before this page existed
+(`常见问题.pdf`, a seven-page PowerPoint). Two things in it were out of date and were fixed rather than
+carried over: **port forwarding is not something this product needs** — relaying is the whole point, and
+the old "check your router's port mapping" line sent people to do work that cannot help — and
+"无效会话" and "无效的玩家档案公钥签名" are one cause with two wordings, not two causes. The page opens
+with three self-checks (is the address still on the host's screen, do both sides have the same version
+and mod count, was the address copied whole) because those three answer most reports before the list is
+needed, and it ends with the official Q group (497060189) as a button that copies the number — reading
+six digits off a screen and typing them into a phone is where people give up.
+
+Every illustrated answer opens with where the screenshots came from. For the three walkthroughs that is
+**Minecraft Java 版 26.3** with **LAN World Plug-n-Play (mcwifipnp)**, because "does my game look like
+this?" is the question the reader has while looking at somebody else's menu bar, and the version-mismatch
+answer depends on it. The troubleshooting page says something different and more necessary: its six
+screenshots were collected from months of feedback, so they are **visibly from different versions** (one
+is 1.21.11, two are phone-client layouts) — and the error *text* is what the reader is matching against,
+not the window around it. All twelve are the client's own assets (532 KB together) because a help page
+that needs the internet to show a picture is not a help page on the machine that has no internet.
+
+The tunnel is **not a destination of its own**; it is driven from 联机, which is where the user
+asked for it. 首页's 服务 section — which used to carry the same three cards — has been removed
+along with 每日资讯 and 当前会话, and the space below the games board is deliberately blank while
+the daily content that replaces them is designed. `/api/daily-news` is still served and still
+tested; nothing on the Rust side changed when the page stopped asking for it.
+
+**首页** leads with the games board. The heading is a calendar glyph and 游戏日历 rather than the
+page's own name over a sentence describing the board already on screen.
+
+The heat map is one cell per day and one column per week over the last 18 weeks — a contribution
+calendar applied to "how much did I play", with the weekday gutter, the month labels along the top
+and a ring on today. **The data is real**, and the graph is the visible end of the session history:
+
+* `kernel::reap` writes one record to `hongshi.sessions.json` when a kernel exits — see
+  [`src/sessions.rs`](src/sessions.rs). The *kernel* records the session, not the page, so a browser
+  closed mid-session cannot lose the time and a page reload cannot double-count it.
+* `/api/sessions?days=126` aggregates that file to one row per day, and **the level buckets live in
+  Rust** (`sessions::level`) rather than in the page, so the graph and any other reader of the same
+  file cannot disagree about what a colour means.
+* The page folds the **live** tunnel into today's row while a room is open, so the square fills in as
+  you play instead of jumping when you stop. That is the one place the scale is duplicated in
+  JavaScript, and it is commented at both ends.
+* A session shorter than 60 seconds is not recorded at all: a tunnel that never reached the relay is
+  not a play session, and a mark on the calendar for a failure would be worse than no mark.
+
+**联机** is one decision and one button. It used to be a form — 转发方式 (中转 / P2P), 协议
+(TCP / UDP), 本机地址, a relay listbox and a tunnel card — with only the first option of each ever
+selectable, which is not a choice but a reading assignment. 转发方式 and 协议 did not stop existing
+(the kernel still only does relayed TCP); they went because stating them at the user as if they were
+decisions is worse than saying nothing.
+
+The two controls that remain are the two the user can answer:
+
+* **中转服务器**, with a stability reading from the shell's own probe. `ok` is 延迟稳定 in green,
+  `slow`/`ping` is 较稳定 or 仅能 ping 通 in amber, and nothing answered is 断联 in a deliberately
+  bright red. The distinction between "the control port answered" and "only ICMP did" is the whole
+  point: a node you can ping but not tunnel through is not a usable node, and calling it 稳定 would
+  be a lie the user pays for with a dead address they handed to a friend.
+* **本地游戏端口**, which is not really a choice — it is a fact about where the game is listening, so
+  it is *detected* and shown, and the field exists to correct the detection rather than to demand an
+  answer. An empty field is filled in; a field the user has touched is left alone, unless they press
+  the **refresh button** beside it, which is the user asking for it to be overwritten. That button is
+  one glyph in a 44px square, not a labelled button: a text label at the field's own height was wide
+  enough to squeeze the field it belongs to, and a smaller pill beside a 44px field is the one shape
+  that looks wrong however the row is arranged. The word it would have carried is in the hint under
+  the field, which says where the port came from and says to press the refresh button when nothing was
+  found; the `aria-label` keeps it for a screen reader. And it is not decoration:
+  detection is a snapshot of a machine that changes, and "no game running" is the answer until the
+  user starts one.
+
+  The detection itself has three steps, in [`src/ports.rs`](src/ports.rs):
+
+  1. **`25565`–`25569`, held by a Java process.** The vanilla default and the ports a second or third
+     world lands on. One `netstat`, and the search is usually over.
+  2. **Any other port in 10000–65535 held by a Java process.** This is the step that earns its keep: a
+     modpack launcher or a hand-edited `server.properties` puts the game somewhere else, and the only
+     thing distinguishing that socket from the other thirty is *which process owns it*. Identified by
+     cross-referencing listening ports with process names — on Windows `netstat -ano` (33 ms measured)
+     plus `tasklist` (254 ms) **only when a name is actually needed**; on Linux one `ss -ltnp`, with
+     `netstat -ltnp` as the fallback. Matching is on the image *stem*, so `javaw.exe` and `java8.exe`
+     count while `javascript-tool` does not.
+  3. **`25565` as a floor**, reported as `fallback` rather than as a finding, and the page says so in
+     words: "we did not find your game, this is the default" and "we found your game" are different
+     claims and the user is about to hand this number to somebody else.
+
+  There is a known gap in step 2, stated here so it is not rediscovered as a bug: a server running
+  under a launcher's bundled JRE whose image is *not* named `java` is not recognised by name, and the
+  search falls through to step 3. That is why step 3 exists and why it says what it is. The other way
+  to recognise a Minecraft server — speaking its own protocol at it with a Server List Ping — was the
+  first design and is strictly more informative; it is not what this does because the client already
+  owns one child process and its stdout, and a second protocol stack is a large thing to own in the
+  one part of the product that has no dependencies.
+
+Starting a room does **not** open the log panel. The address is the thing the user came for, so it
+arrives in a dialog, and the dialog opens *immediately* in a pending state rather than after a wait:
+a fixed wait cannot tell "not yet" from "not ever", and the first version of this flow announced
+failure while the page behind it already showed the address. Closing a room is a toast, not a
+pageful of terminal output.
+
+The game card is a screenshot with a scrim under the title, and the rotation is already written
+even though there is one game: the interval only starts for more than one, so the second game is a
+data edit rather than a rewrite.
 
 In the interface the program calls itself **客户端** and calls `hongshic` the **内核**. The word
 "shell" is used in this README, in the crate name and in the code, and nowhere a user can see it:
 to someone who is not a programmer, a "shell" wrapping a "kernel" reads as a command prompt.
 
-**联机** is the one to look at. 转发方式 (中转 / P2P) and 协议 (TCP / UDP) are two halves of one
-decision and sit on **one row**, each with its own hint underneath; only 「中转 · TCP」is selectable
-today, and the others are marked dashed and disabled with the reason in place.
+### The first launch: a spotlight, and one notice
+
+Two things run at boot, in this order — the guide, then the update notice, and never both at once.
+
+**Onboarding is a spotlight.** One real control is lifted out of a dimmed page and one sentence sits
+beside it. It replaced four dialogs with a diagram each, which was the wrong shape for the job: a
+dialog describes the interface *somewhere the interface is not*, so the user read about a button and
+then had to go and find it. Each step is now a target plus a sentence, and the tour never invents a
+surface of its own:
+
+1. the 联机 tab in the top bar — 点击切换联机页. Advancing is *the click itself*, so the tour follows
+   the user instead of asking them to confirm they read something.
+2. the relay picker — 选择一台离你最近的服务器…, with 知道了 to go on. This is the one step whose action
+   is deliberately not the way forward: clicking that control opens a list, and advancing on that
+   click would move the ring down to the port row while the list the user was just told to read is
+   still hanging open under it.
+3. the port row — the detection is explained, with a link out for anyone who does not know what a
+   game port is.
+4. 开启房间 — advancing is pressing the button. That button is `disabled` until a kernel is installed,
+   and **a disabled button dispatches no click event at all**, so this step also carries 知道了 and,
+   when the kernel is missing, a sentence naming the 自动下载内核 button that has to come first.
+
+Escape, 跳过 and reaching the end are the user saying they are done, and the flag is written for those
+only. A click on the dimmed page ends the guide too — a guide that will not go away is worse than no
+guide — but it is *not* remembered, so a misclick does not cost somebody the rest of the tour, and
+neither does the step-3 link, which walks off to read the help before step 4 has been seen. The flag is
+also treated as a first run rather than as a preference: a kernel already installed is evidence of a
+previous run, so it counts as "seen" and is recorded as such.
+
+**The update notice is the answer to "you should not have to go looking".** The client asks the
+official site for the latest version about two and a half seconds after boot and speaks only when there
+is a **newer** version the user has not been told about. Three answers come back — newer, 已是最新, and
+"could not check" — and exactly one of them is worth a modal at startup; the settings page (关于) is
+where all three belong. It is once per *version* rather than once per launch, because a notice that
+returns every morning is a notice people learn to dismiss without reading.
+
+### The tenth launch
+
+[`src/launch.rs`](src/launch.rs) counts launches of the **client** — `hongshi.launches.json` beside the
+executable, bumped once per process start and reported as `launches` in `/api/health`. Counted in the
+page's `localStorage` instead it would be a count of *that browser*: reset by clearing site data, doubled
+by a second browser, and never advanced at all by a build whose page is opened somewhere else. It is
+deliberately not a field in `settings.json` either, because that file is rewritten whole every time the
+settings form is saved, and a counter that forgets is worse than no counter — the only thing anybody
+does with this number is ask whether it is a round one.
+
+Every tenth launch, and only then, the shell says thank you and points at 爱发电. Two conditions decide
+it, and both are about not being rude:
+
+* **When** — when the *room* dialog is dismissed, by 知道了, by Escape or by a click on the backdrop. Not
+  at startup, which would be asking a stranger, and not on a launch where no room ever came up, which
+  would be thanking somebody for a session that did not happen: the address arriving is what arms it.
+* **Once per run** — a second room in the same evening does not ask again.
+
+**下次一定** closes it; **去赞助** opens `https://ifdian.net/a/RedstoneOnline` in a new tab, because the
+room the user just opened has to stay on screen behind it. The address is printed in full above the
+buttons rather than hidden behind one of them: a tip link nobody can read before clicking is a link
+people do not click.
 
 The relay is a **listbox**, not a native `<select>`. It was a table of rows that were each secretly a
 radio button — a table of facts that was really one control — so it became the control it was. The
@@ -148,7 +358,7 @@ link. The check asks `GET /api/webui/version` and has three answers, not two —
 **无法检查**. A `404` is the third: it means the site has published no version, and reporting that as
 "已是最新" would be a claim nobody made.
 
-The running build is **测试版 v0.4.0**. The channel is one constant (`crate::CHANNEL`) because
+The running build is **测试版 v0.5.0**. The channel is one constant (`crate::CHANNEL`) because
 `--version`, the About panel and the site's endpoint are three places a user can compare, and two of
 them disagreeing is worse than either being wrong.
 
@@ -160,13 +370,24 @@ list, the latency probe, settings persistence, quit — and **the tunnel itself*
 puts the address on the card. `POST /api/tunnel/start|stop` drive it; `GET /api/kernel` reports what
 it is doing.
 
+Two endpoints exist for the 联机 page and neither needs an argument it cannot default:
+`GET /api/ports/detect[?default=N]` reports the local game port it found (and what it looked at),
+and `GET /api/sessions[?days=N]` reports the recorded history rolled up to one row per day. Both are
+reads of something the machine already knows, so a malformed query gets the normal answer rather
+than an error — a bad window should draw the usual window.
+
 The kernel is looked for in `core/` **beside the executable and in the working directory**, under
 either its plain name (`hongshic.exe`) or the name it is published as
 (`hongshic-windows-amd64.exe`) — someone who downloaded it by hand will not have renamed it. When
-there is none, the 联机 page says so and offers **下载内核**, which fetches the build for this
-platform and architecture from `GET /api/download/client?platform=…&arch=…` and installs it next to
-the client. The platform is taken from the client's own build, not from a user-agent string: the
-kernel runs on the same machine, so the client is the authority.
+there is none, the 联机 page says which file is missing, where it looked and for which platform, and
+carries a **自动下载内核** button. That button goes through the *shell*, not through a browser link:
+`POST /api/kernel/download` fetches the build from the official endpoint
+(`GET /api/download/client?platform=…&arch=…`) and writes it into `core/`, because a browser download
+would land in the user's Downloads folder and the client would still not find it. The platform comes
+from the client's own build rather than a user-agent string: the kernel runs on the same machine, so
+the client is the authority. When the install lands, `kernelStore.refresh()` is what makes the notice
+disappear and 开启房间 come alive — the kernel store is the single thing that decides whether a kernel
+exists, so nothing else tries to guess it from a button click.
 
 The integration contract is [hongshi.site/api.html](https://hongshi.site/api.html), and three things
 in it shape the code:
@@ -187,7 +408,7 @@ in it shape the code:
 cargo run                        # start it and open the browser
 cargo run -- --no-browser        # just start it; the URL is on the console
 cargo test                       # 104 unit tests + 20 end-to-end tests
-powershell -File scripts\verify.ps1   # 149 acceptance checks against the real binary
+powershell -File scripts\verify.ps1   # 188 acceptance checks against the real binary
 
 # the artifacts that ship
 powershell -File scripts\build.ps1 -Release -Platform windows-amd64,linux-amd64 `
@@ -247,13 +468,27 @@ checked the same way the others are: magic `CF FA ED FE`, then the CPU type (`0x
 `0x0100000C` for arm64). A fat/universal binary is deliberately rejected — each download-page row is
 one file for one architecture.
 
-Current artifacts for **测试版 v0.4.0**:
+Current artifacts for **测试版 v0.5.0**:
 
 | Artifact | Size | Format |
 |---|---|---|
-| `hongshi-windows-amd64.exe` | 1446 KB | PE x86_64 |
-| `hongshi-linux-amd64` | 1655 KB | ELF x86_64, static musl, no dynamic loader |
+| `hongshi-windows-amd64.exe` | 2257 KB | PE x86_64, console |
+| `hongshi-linux-amd64` | 2448 KB | ELF x86_64, static musl, no PT_INTERP |
 | `hongshi-macos-arm64` / `hongshi-macos-amd64` | — | not built here; see above |
+
+Both are staged for upload by `scripts/build.ps1 -Release -CopyTo dist`, which names them the way the
+download page reads them and asserts the format before copying. The Linux figure is *larger* than the
+Windows one because musl is linked in statically — the price of a binary that runs on any distribution
+without a libc to match.
+
+Most of the last 800 KB is the artwork and the help pages, all embedded rather than fetched: the game
+banner (98 KB), the window background (17 KB), and twelve screenshots across three help articles
+(532 KB), plus two subset CJK faces (725 KB) that no web font CDN could serve for a page that must work
+with no network. They are WebP rather than JPEG because the same picture is 172 KB as JPEG at this
+quality, and the binary is downloaded twice — once for the desktop build and once inside the Android
+app. The games board's 640×360 cut is deliberately *not* embedded: nothing requests it, and everything
+in `web/asset/` is both requestable and paid for in download weight. It lives in `artwork/` beside the
+crate until something reads it.
 
 ### Options
 
@@ -311,10 +546,64 @@ drawer wiring after it, leaving only a status pill frozen on "连接中…". Two
 * `renderPage()` in `app.js` catches a throwing page, shows the error in the page area, and keeps the
   rest of the client running.
 
-The page follows the site's design system in `../HongshiMain/DESIGN.md`: three greys as three
-heights of one board (`#313131` / `#414141` / `#525252`), red `#CA3E47` as signal and **never as
-text**, pill controls, one `drop-shadow` in the whole page, and the fifteen-segment dust line as
-the signature element.
+The page follows the site's design system in `../HongshiMain/DESIGN.md`: pill controls, one
+`drop-shadow` in the whole page, and the fifteen-segment dust line as the signature element.
+
+### The board is red
+
+It is a **bright, saturated red**, not a grey board with a red accent, and that is a different
+problem from the one the old palette solved. Two things the grey scheme leaned on do not survive.
+
+**Text can no longer retreat by opacity.** A white at 60% over a red ground is not dimmer white, it
+is *pink* — the ground bleeds through the glyphs and every secondary label turns a colour nothing
+else uses. The four tiers are therefore painted, picked so each step is a real step down in
+luminance over `--plate` (`#7E141C`):
+
+| token | value | on `--plate` |
+|---|---|---|
+| `--fg` | `#FDF1F3` | 13.5:1 |
+| `--fg-soft` | `#F2C2C9` | 9.0:1 |
+| `--fg-dim` | `#DA939D` | 6.6:1 |
+| `--fg-faint` | `#A85C67` | 3.5:1 — labels, not prose |
+
+The surfaces are three heights of one red — `--ground: #4A0A10`, `--plate: #7E141C`, `--rule:
+#A8242D` — and `--wash: #5F0E15` is a recessed surface *inside* a plate. A translucent white would
+have been the obvious way to write `--wash` and it is wrong for the same reason as the text: white
+over red is pink, and a pink "pressed row" is a colour the palette does not otherwise have.
+
+**The window carries artwork.** `web/asset/lowpoly.webp` — a 1920×1080 low-poly volcanic scene, mean
+luminance 46 of 255 — is the `body` background, `fixed` and `cover`, under a single `--scrim`
+(`rgba(46, 7, 12, 0.5)`). One wash over the window rather than one per card: the cards already carry
+`--plate`, and stacking a second wash on them makes the board look dirty. The scrim exists because
+the artwork's own contrast is enough to break a paragraph of `--fg-soft` over its lightest facets;
+at 0.62 it was so heavy the image read as a red haze, which is the same as not having one.
+
+The source PNG (216 KB) is kept as the master in `artwork/` beside the crate — **not** in `web/asset/`,
+which is exactly the set of files the browser can ask for and which are all `include_bytes!`-ed into the
+binary. A file nobody requests in that directory is a served path and download weight for nothing, which
+is the rule `verify.ps1` now enforces by name. It is worth knowing why the WebP is **16.8 KB**: the PNG's
+alpha channel is 255 in every single pixel, so a quarter of its size was spending itself on a channel
+nothing reads.
+
+**The fire palette stopped being an accent set.** The five steps are still stored as *roles* rather
+than as swatches — `--signal` (`#FF5A33`) is the one accent, `--signal-hot` (`#FF7452`) and
+`--signal-deep` (`#E01F2D`) its hover and pressed steps, `--signal-dim` (`#C02A33`) a quiet wash, and
+`--signal-ink` (`#8B0000`) a ground for white text — but a signal red on a red ground is nearly the
+same colour, so "this is lit" has nothing left to say. Everything that has to read as *active* — the
+current destination, the focus ring, the top of the heat ramp, a primary button — uses the brightest
+step (`#FF5A33`, a near-orange), which separates from the ground by **luminance rather than hue**.
+That is what makes it read as bright and saturated instead of muddy.
+
+The rule that survives from the grey scheme: **a fire colour is never text on a surface.** It is a
+fill, a border, an indicator or a graphic; words are always one of the four tiers above.
+
+`--heat-0` … `--heat-4` are the one place these run as an actual ramp. The bottom step is a plate
+tint rather than a grey — there is no grey any more — and the top step is **amber `#FFD166` rather
+than red**, because a red "most played" on a red card is invisible; the top of the scale has to leave
+the family to be the top. The same amber rings today.
+
+The terminal keeps a near-black screen with a deep-red tint (`--screen: #2A0709`) rather than a red
+panel: the log is a terminal, and the one thing it must not look like is a card.
 
 ### Type: two bundled faces, one per script
 
@@ -365,11 +654,23 @@ interface looked like it had no transition at all. `show()` now removes the clas
 and adds it back, which replays the animation: the incoming board blurs from 7px into focus over
 0.34s. `prefers-reduced-motion` turns it off.
 
-The log panel has a switch in the **top-right corner**, wearing the sidebar toggle's shape so the
-two read as the same kind of control. It lives outside `.page` (the router empties that element on
-every navigation) and outside the drawer (a control that disappears with the thing it opens is no
-use once the thing is open). When the drawer pushes the board aside the switch moves with it; when
-the drawer is a sheet over the content, the switch rides on top.
+The log panel has **no switch of its own**. It used to: a `position: fixed` button in the window's
+top-right corner, later moved into the top bar, kept in step with a second close button inside the
+drawer's header. Both are gone. The panel is opened by the page that needs it — 查看日志 on 联机, and
+the tunnel card before that — and closed with **Escape**, which `drawerOpen` installs as a
+document-level listener because the drawer is not focused when it opens and a listener on it would
+never fire.
+
+That leaves two ways out and no visible control, which is the trade the user asked for when the bar
+button went. It is defensible here and would not be in a panel the user can get stuck behind: the
+drawer is a side sheet, not a modal, so the board stays visible and usable beside it, and navigating
+away closes it because the page that owns it is destroyed. `drawerOpen` still sets `aria-hidden` on
+the drawer so the hidden panel is out of the accessibility tree, and the drawer keeps its own
+`[hidden]` rule so it does not paint on load.
+
+The bar's account circle is the only control left in the top bar's right-hand group, and it is
+inert by design: it draws the empty-avatar state so the bar's geometry is settled before the page
+behind it exists.
 
 Nothing polls for its own sake. The relay list is read once at startup; the kernel is polled at 1 Hz
 only while a tunnel is alive, at 0.2 Hz while an open panel waits for one, and **not at all**
@@ -433,21 +734,32 @@ src/
   site.rs             the site: node list + cache, the latency probe; the Mojang news reader
   net.rs              WinHTTP over FFI (Windows) or plain TCP elsewhere — no TLS dependency
   config.rs           settings file: parse, clamp, save
+  launch.rs           how many times this client has been started, for the tenth-launch thank-you
+  sessions.rs         the session history: one record per tunnel, and the daily rollup
+  ports.rs            finding the local game port, so the user does not have to know one
   browser.rs          opening the default browser per platform
   util.rs             percent-decoding and ISO-8601 timestamps
   log.rs              one-line console logging; sanitized values, best effort, never fatal
 web/
-  index.html          the shell: sidebar, page container, log drawer
+  index.html          the shell: top bar, page container, status bar, log drawer
   icons.svg           every icon as a <symbol>, referenced by <use href="icons.svg#i-…">
-  main.css            the design system: tokens, sidebar, board, drawer, terminal
-  app.css             page components: news, usage, node list, tunnel summary, forms
-  app.js              runtime: API wrapper, router, terminal, settings
-  pages.js            one function per route
+  main.css            the design system: tokens, top bar, status bar, board, drawer, terminal
+  app.css             page components: heat map, game card, news, usage, node list, tunnel summary, forms
+  app.js              runtime: API wrapper, router, dialogs, the first-run guide, terminal, settings
+  pages.js            one function per route, including 帮助 and its three articles
+  asset/              exactly what ships: lowpoly.webp (the window background), the game banner and
+                      the twelve help screenshots. Every file here is embedded in the binary and
+                      requestable by the browser — `artwork/` holds what is neither
+artwork/              the masters and the cuts nobody requests: lowpoly.png, the 864×864 key art,
+                      and the 640×360 hero thumbnail. Kept in the repository, out of the served tree
+                      and out of the binary. (The other masters — six PNGs of 1.5 / 0.6 / 15.6 / 1.9 /
+                      1.1 / 1.0 MB plus the 7-page `常见问题.pdf` the six error screenshots came
+                      from — are deliberately not in the repository at all: they can be taken again.)
 tests/shell.rs        20 end-to-end tests: spawn the binary, talk to it over a socket
 examples/             manual probes: shutdown, first request, connection cap, half-open hold,
                       kernel terminal colour
 scripts/build.ps1     build + assert the binary format + optional copy to the download tree
-scripts/verify.ps1    149 acceptance checks against the real binary
+scripts/verify.ps1    188 acceptance checks against the real binary
 ```
 
 ## Why no HTTP framework
@@ -661,3 +973,60 @@ Two deliberate design notes that fall out of the same work:
   — the peer's pending data is discarded and the client that sent a malformed request never sees the
   400. `finish()` drains what the peer already sent (bounded at 64 KB, since a hostile client
   reaches this path too) and then shuts the write half down.
+
+**A dialog can be dismissed by the click that opened it.** The room dialog appears about 200 ms after
+开启房间 is pressed — the shell has to spawn the kernel and wait for the relay to hand out an address —
+so the second click of a double-click, or an automated click that retried because the button it aimed at
+had just been covered by an overlay, lands on the backdrop and closes the message before it can be read.
+Found while testing the tenth-launch thank-you, which kept vanishing mid-flow; the dialog is not
+supposed to be dismissible by a gesture that predates it. `Element.prototype.remove` wrapped for one run
+and a stack trace later, the culprit was the backdrop handler. It now ignores clicks for the first
+350 ms, which costs a deliberate dismissal nothing.
+
+**A 200 is not the same as a working page.** The help page shipped to a blank screen: the top bar drew,
+the status pill sat on 连接中…, and `#page` stayed empty. The cause is that `/help/port` is the first
+route in this client with **two segments**, and every asset reference was relative — in `index.html` and
+in `Shell.assetUrl`. A browser resolves `href="main.css"` against the page URL, so on that page it asked
+for `/help/main.css`, got a 404, and arrived with no stylesheet, no script and no icons; `window.Shell`
+was never defined at all.
+
+What makes it worth writing down is how invisible it was. `/help/port` answers 200 with the whole
+document in it, so every server-side check passed — including the acceptance script's "a browser can
+fetch each asset" loop, which derives its requests from the page *as served at `/`*: one segment deep,
+where relative paths happen to work. The only tell was a rendered page with nothing in it.
+
+References are absolute now and `assetUrl` prefixes the slash, held by two checks: the Rust suite
+compares the served page with `web/index.html` byte for byte, and `verify.ps1` refuses any relative
+`href`/`src` in the markup. The second one found a second thing on its way in — two checks had been
+asserting `href="main.css"` as a stand-in for "the page is not rewritten in flight", a literal that
+stopped meaning anything the moment the paths changed; both now compare against the file, which is what
+their names said all along.
+
+**The guide built a layer that ate the click it existed to pass through.** The spotlight's overlay is
+`pointer-events: none`, which is the decision the whole thing turns on — the user is told to press the
+real 联机 link and the real 开启房间 button, so the page underneath has to stay live. The first version
+then added `.guide-hit`, a small transparent rectangle over the lifted control, "so the click reaches
+it". It did the opposite: the rectangle sat *on top of* the link and took the click itself, so step 1
+could never be finished by doing what it said, and a click on the dimmed page never dismissed anything
+either, because the overlay that was listening for that click had `pointer-events: none` too. **Two
+symptoms, one wrong mental model: an element that sits on top of a control competes for the click
+rather than conducting it.** The layer is gone, and `verify.ps1` fails if the name comes back.
+
+**"Was this click aimed at the guide?" cannot be asked of the DOM.** With the layer gone the question
+is a listener on `document`, and the first version answered it with `lifted.contains(event.target)`.
+That is wrong here for a reason specific to this interface: **every page replaces its own contents on
+each store publication**, and when the replacement lands between the press and the release the browser
+retargets the click at the common ancestor. A press the user aimed squarely at the relay picker arrives
+with `#room-body` as its target, `contains` says no, and the tour ends mid-step — which is how it was
+found, by happening on one run and not the next. The coordinates are what the user aimed at, so the
+coordinates are what is tested now, against three boxes: the card, the lifted control, and any list
+that control has opened (a popover belongs to the thing that opened it and hangs outside its box).
+
+**A card that points at a list has to get out of its way.** The relay list opens *downwards* out of the
+control step 2 points at, and the card was placed below its target like every other step — squarely on
+top of the rows the user had just been told to read. The rows were still in the DOM and still clickable
+in principle; they simply could not be clicked, which is the kind of bug a screenshot does not show and
+a `querySelector` cheerfully confirms is fine. Step 2 places above, and step 4 places at the top of the
+page for the same class of reason at the other end of the window: there is no room under 开启房间, and
+"above" lands on the two controls that step's own sentence names — the button itself, and the
+自动下载内核 button it tells the user to press first.

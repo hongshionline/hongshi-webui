@@ -12,3 +12,8 @@
 # Local run output: the settings file is written next to the executable, and these are
 # the two places the shell looks.
 hongshi.settings.json
+
+# Artifacts staged for upload by `scripts/build.ps1 -Release -CopyTo dist`: the same two
+# files that end up in the site's download tree, under the names the download page reads.
+# Binary output, and reproducible from a clean tree in fifteen seconds.
+/dist/

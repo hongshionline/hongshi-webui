@@ -232,12 +232,25 @@ try {
     $reload = Send-Request $port 'GET' "/" $authority @{} $null
     Assert-That 'a reload of the page works' ($reload.Status -eq 200) "status $($reload.Status)"
     Assert-That 'both requests served the same bytes' ($reload.Body -eq $page.Body) 'the two bodies differ'
-    Assert-That 'the page is served verbatim, not rewritten in flight' ($page.Body.Contains('href="main.css"')) $page.Body
+    # The bytes on disk are the bytes sent. This used to assert that the served page
+    # contained `href="main.css"`, which was evidence of "not rewritten" back when the
+    # page was rewritten on the way out to inject a session token — all that survived was
+    # the literal, and it had stopped meaning anything: the day the references became
+    # absolute (they have to be, for a route like `/help/port`) the check failed against a
+    # page that was being served perfectly verbatim. Comparing with the file says what the
+    # check is named after.
+    $onDisk = [IO.File]::ReadAllText((Join-Path $root 'web\index.html'))
+    $sameBytes = $page.Body.Replace("`r`n", "`n") -eq $onDisk.Replace("`r`n", "`n")
+    Assert-That 'the page is served verbatim, not rewritten in flight' $sameBytes `
+        'the served body differs from web/index.html'
     # Matched on ASCII on purpose. This file has no BOM (every .ps1 here is
     # ASCII-only for the same reason), so Windows PowerShell 5.1 decodes it as
     # ANSI and Chinese literals inside it do not survive - the assertion then
     # fails against a page that is perfectly fine, which is what happened.
-    Assert-That 'the page is the shell UI' ($page.Body.Contains('lang="zh-CN"') -and $page.Body.Contains('class="side"')) $page.Body
+    # ASCII markers again: see the note above. `class="topbar"` is the top bar that
+    # replaced the old `class="side"` sidebar, and it marks the shell for the same
+    # reason: it is the client's own chrome and it is in every copy of the page.
+    Assert-That 'the page is the shell UI' ($page.Body.Contains('lang="zh-CN"') -and $page.Body.Contains('class="topbar"')) $page.Body
     Assert-That 'the page is not cacheable' ($page.Text -match '(?i)cache-control: no-store') $page.Text
     Assert-That 'the page forbids framing' ($page.Text -match "frame-ancestors 'none'") $page.Text
 
@@ -260,7 +273,9 @@ try {
     $routes = @($references | Where-Object { -not ($_ -split '[?#]')[0].Split('/')[-1].Contains('.') })
 
     Assert-That 'the page references its stylesheets, sprite and scripts' ($assets.Count -ge 5) ($assets -join ', ')
-    Assert-That 'the page links its own routes' ($routes.Count -ge 6) ($routes -join ', ')
+    # Four destinations plus the wordmark, which links home too. It was six before
+    # the navigation moved to the top bar: 云存档 and 租聘服 are no longer in it.
+    Assert-That 'the page links its own routes' ($routes.Count -ge 5) ($routes -join ', ')
 
     foreach ($expected in @('main.css', 'app.css', 'icons.svg', 'app.js', 'pages.js')) {
         $found = @($assets | Where-Object { $_ -like "*$expected*" })
@@ -270,6 +285,13 @@ try {
         }
     }
     Assert-That 'the sprite reference kept its fragment' (@($assets | Where-Object { $_ -match 'icons\.svg#' }).Count -ge 1) ($assets -join ', ')
+
+    # 每个引用都从根写起，这条不是洁癖。路由可以不止一段（`/help/port`），而相对引用
+    # 会先解析到 `/help/`：那一页因此既没有样式也没有脚本，只有静态顶栏和一句「连接中…」。
+    # 这正是帮助页第一版的样子，而且没有任何一个 HTTP 层检查看得出来 —— 页面本身是 200。
+    $relativeRefs = @($references | Where-Object { -not $_.StartsWith('/') -and -not $_.StartsWith('http') })
+    Assert-That 'every asset the page loads is addressed from the root' ($relativeRefs.Count -eq 0) `
+        ($relativeRefs -join ', ')
 
     foreach ($asset in $assets) {
         $withoutFragment = ($asset -split '#')[0]
@@ -294,7 +316,14 @@ try {
     Write-Host 'assets and API' -ForegroundColor Cyan
     $css = Send-Request $port 'GET' "/main.css" $authority @{} $null
     Assert-That 'main.css is served as text/css' ($css.Status -eq 200 -and $css.Text -match 'content-type: text/css') "status $($css.Status)"
-    Assert-That 'main.css carries the design tokens' ($css.Body.Contains('--ground: #313131')) $css.Body
+    # The token name rather than its value, plus one value that has to agree with the
+    # stylesheet: this asserts the served CSS is the real design system and not an
+    # empty or truncated file, and it used to do that by hard-coding the old grey
+    # `#313131`. Pinning the current red would fail on the next palette change for no
+    # reason, so the literal is a token that is definitionally present and the rest is
+    # the name.
+    Assert-That 'main.css carries the design tokens' `
+        ($css.Body.Contains('--ground:') -and $css.Body.Contains('--plate:') -and $css.Body.Contains('--signal:')) $css.Body
 
     $js = Send-Request $port 'GET' "/app.js" $authority @{} $null
     Assert-That 'app.js is served' ($js.Status -eq 200 -and $js.Body.Contains('/api/health')) "status $($js.Status)"
@@ -317,6 +346,10 @@ try {
     Assert-That 'health reports the kernel block' ($health.Body -match '"kernel":\{.*"running":false') $health.Body
     Assert-That 'health names the UI source' ($health.Body.Contains('web_source')) $health.Body
     Assert-That 'health reports its own pid' ($health.Body.Contains("`"pid`":$($process.Id)")) $health.Body
+    # 启动次数。页面在房间弹窗关掉时读一次，判断这次是不是整数次启动；字段缺了或恒为 0 就等于
+    # 「永远不是整数次」，而那是一个看起来能跑、实际永远不触发的功能。
+    Assert-That 'health reports which launch this is' `
+        ($health.Body -match '"launches":\s*[1-9]\d*') $health.Body
 
     $echo = Send-Request $port 'POST' "/api/echo" $authority @{} 'a=1&b=hello%20world'
     Assert-That 'a posted body is read and decoded' ($echo.Status -eq 200 -and $echo.Body -eq '{"a":"1","b":"hello world"}') "$($echo.Status) $($echo.Body)"
@@ -434,20 +467,37 @@ try {
     # -----------------------------------------------------------------------
     Write-Host ''
     Write-Host 'the interface' -ForegroundColor Cyan
-    # Every route the sidebar links to is the same document, so a reload or a
+    # Every route the client links to is the same document, so a reload or a
     # bookmark lands somewhere sensible.
-    foreach ($route in @('/', '/connect', '/settings', '/cloud', '/hosting', '/together')) {
+    foreach ($route in @('/', '/connect', '/settings', '/cloud', '/hosting', '/together', '/help', '/help/port', '/help/join', '/help/trouble')) {
         $r = Send-Request $port 'GET' "$route" $authority @{} $null
-        # ASCII markers again: see the note above.
-        $isShell = $r.Status -eq 200 -and $r.Body.Contains('class="side"') -and $r.Body.Contains('id="page"')
+        # ASCII markers again: see the note above. The route set still includes the
+        # two pages that left the nav bar — they are still real routes, they just
+        # have no link any more.
+        $isShell = $r.Status -eq 200 -and $r.Body.Contains('class="topbar"') -and $r.Body.Contains('id="page"')
         Assert-That ("$route serves the shell") $isShell "status $($r.Status)"
     }
     # A file that is not there stays an honest 404 instead of rendering as a page.
     $dotted = Send-Request $port 'GET' "/missing.css" $authority @{} $null
     Assert-That 'a missing asset is a 404, not the shell' ($dotted.Status -eq 404) "status $($dotted.Status)"
 
+    # 帮助页《什么是游戏端口》的三张操作截图. They are referenced from `pages.js` and not
+    # from the page markup, so the loop that derives its requests from `index.html` cannot
+    # see them, and a filename that does not exist would come out as a broken picture in
+    # the middle of a procedure somebody is following with the game open.
+    foreach ($shot in @('help-port-menu.webp', 'help-port-lan.webp', 'help-port-chat.webp',
+                        'help-join-main.webp', 'help-join-multiplayer.webp', 'help-join-direct.webp',
+                        'help-trouble-refused.webp', 'help-trouble-lost.webp', 'help-trouble-signature.webp',
+                        'help-trouble-registry.webp', 'help-trouble-auth.webp', 'help-trouble-unknownhost.webp')) {
+        $image = Send-Request $port 'GET' "/asset/$shot" $authority @{} $null
+        $isWebp = $image.Status -eq 200 -and $image.Body.Length -gt 512 -and
+            $image.Text -match 'content-type: image/webp'
+        Assert-That "the help page's $shot is served as a real image" $isWebp `
+            "status $($image.Status), $($image.Body.Length) bytes"
+    }
+
     # The sprite is referenced by every icon and must keep its fragment intact, or
-    # the whole sidebar renders as empty boxes.
+    # the whole top bar renders as empty boxes.
     $sprite = Send-Request $port 'GET' "/icons.svg" $authority @{} $null
     Assert-That 'the icon sprite is served' ($sprite.Status -eq 200 -and $sprite.Body.Contains('i-home')) "status $($sprite.Status)"
     Assert-That 'the sprite reference kept its fragment' ($page.Body -match 'icons\.svg#i-') 'the page markup'
@@ -779,17 +829,28 @@ $pagesText = [IO.File]::ReadAllText($pagesJs)
 $adds = ([regex]::Matches($pagesText, 'el\.addEventListener\(')).Count
 $removes = ([regex]::Matches($pagesText, 'el\.removeEventListener\(')).Count
 Assert-That 'every delegated listener on .page is taken off again' ($adds -gt 0 -and $adds -eq $removes) "adds $adds, removes $removes"
-Assert-That 'the connect page removes its click and change listeners' `
-    (($pagesText -match 'el\.removeEventListener\("click"') -and ($pagesText -match 'el\.removeEventListener\("change"'))
+# 联机 delegates a fixed set and removes the same three. This used to name `change`
+# explicitly, which was the old page's port field; the room page uses `input` and
+# `keydown` instead, and naming the old one made this check assert a shape the code no
+# longer has rather than the property that matters - that what goes on comes off.
+Assert-That 'the connect page removes the delegated listeners it added' `
+    (($pagesText -match 'el\.removeEventListener\("click"') -and
+     ($pagesText -match 'el\.removeEventListener\("input"') -and
+     ($pagesText -match 'el\.removeEventListener\("keydown"'))
 
 # A listener on `document` outlives the page for the same reason one on `.page` does,
-# and it is quieter about it: the relay picker puts its "click outside closes me" there,
-# and a leftover would keep shutting a list nobody can open, once per visit. Every
-# handler added has to be removed by the same name, and the picker has to be shut as
-# the page goes.
-$docAdded = @([regex]::Matches($pagesText, 'document\.addEventListener\("([a-z]+)",\s*([A-Za-z]+)\)') |
+# and it is quieter about it: a leftover would keep firing at markup nobody can see, once
+# per visit. Every handler added has to be removed by the same name.
+#
+# This is checked across BOTH scripts, because where the listener lives moved: the room
+# dialog used to install its own Escape handler from `pages.js`, and dialogs are now the
+# shell's own (`app.js`), so that is where the one `document` listener is. Checking only
+# `pages.js` would have started failing for the wrong reason - and checking only `app.js`
+# would miss a page that quietly added one back.
+$docText = $appText + "`n" + $pagesText
+$docAdded = @([regex]::Matches($docText, 'document\.addEventListener\("([a-z]+)",\s*([A-Za-z]+)\)') |
     ForEach-Object { $_.Groups[2].Value })
-$docRemoved = @([regex]::Matches($pagesText, 'document\.removeEventListener\("([a-z]+)",\s*([A-Za-z]+)\)') |
+$docRemoved = @([regex]::Matches($docText, 'document\.removeEventListener\("([a-z]+)",\s*([A-Za-z]+)\)') |
     ForEach-Object { $_.Groups[2].Value })
 $docLeaked = @($docAdded | Where-Object { $docRemoved -notcontains $_ })
 Assert-That 'every document listener is removed by name too' ($docAdded.Count -gt 0 -and $docLeaked.Count -eq 0) `
@@ -814,6 +875,189 @@ Assert-That 'no page script hardcodes an icons.svg reference' ($pagesText -notma
 # has to go through the helper that finds the real label element.
 Assert-That 'no pill writes its label into the dot' `
     (($pagesText -notmatch 'lastElementChild\.textContent') -and ($pagesText -match 'function setPill'))
+
+# 帮助页的图片走同一个 helper，路径不在页面里手写。理由是同样的：`assetUrl` 是唯一
+# 知道「用一个 shell 资源要怎么写地址」的地方，手写的 `src="/asset/…"` 会在 helper
+# 以后变复杂时悄悄失效，而且它还会让「这页要哪些图」散成好几处。
+Assert-That 'the help screenshots address their files through the helper' `
+    (($pagesText -match 'S\.assetUrl\("asset/" \+ file\)') -and
+     ($pagesText -match 'help-port-menu\.webp') -and ($pagesText -match 'help-port-chat\.webp'))
+Assert-That 'no page script hardcodes an asset path' ($pagesText -notmatch 'src="/asset')
+
+# 房间开着的那一段时间是唯一能问「朋友怎么进来」的时刻，所以那两个入口就长在地址下面。
+# 引导只出现一次，帮助页得从这个位置进得去。
+Assert-That 'the open room offers both help pages' `
+    (($pagesText -match 'class="room-links"') -and ($pagesText -match 'href="/help/join"') -and
+     ($pagesText -match 'href="/help/trouble"'))
+# 有截图的问题都要声明图片出处（版本与模组），而且是**在文章之前**：读者一边看别人的
+# 菜单截图一边就会想「我的游戏长这样吗」。
+Assert-That 'the illustrated answers say where the screenshots came from' `
+    (($pagesText -match 'function helpSources') -and ($pagesText -match 'topic\.sources') -and
+     ($pagesText -match 'mcwifipnp'))
+Assert-That 'the help page lists every question it has' `
+    (@([regex]::Matches($pagesText, 'slug: "')).Count -ge 3)
+
+# 群号是页面上唯一一个「做了事」的控件。不检查它有没有真的接上复制，就只剩一个长得像
+# 按钮的装饰 —— 而它存在的理由正是「别让人对着屏幕手打六位数字」。
+Assert-That 'the group number is a button that copies itself' `
+    (($pagesText -match 'data-copy="497060189"') -and
+     ($pagesText -match 'querySelectorAll\("\[data-copy\]"\)') -and
+     ($pagesText -match 'S\.copyText\(button\.dataset\.copy'))
+
+# 报错对照表来自早先那份 PDF，图是从里面抽出来的：出处那句必须说清「版本和时间都不一样」，
+# 否则读者会拿手机版的截图去对自己的电脑屏幕，然后以为帮助页写错了。
+Assert-That 'the troubleshooting page warns that its screenshots are from mixed versions' `
+    (($pagesText -match 'sources: caseSources') -and ($pagesText -match '版本各不相同'))
+
+# ---------------------------------------------------------------------------
+# 第十次启动的感谢提示。
+
+# 它挂在**房间弹窗关闭**上，而不是启动时。启动时问一个还没玩的人是问错了对象，而房间起来
+# 又关掉弹窗的那一刻，用户刚把地址发给朋友 —— 那是整个产品里唯一能证明「他和朋友玩过了」的时刻。
+Assert-That 'the thank-you waits for a room that actually came up' `
+    (($pagesText -match 'if \(roomOpened\) S\.announceSupport\(\)') -and
+     ($appText -match 'function announceSupport'))
+
+# 每十次，每次启动最多一次。数字来自客户端而不是 localStorage：清掉站点数据或换个浏览器打开的
+# 是同一个客户端，不该让计数从头再来，也不该被一个浏览器翻倍。
+Assert-That 'the thank-you is every tenth launch, once per run' `
+    (($appText -match 'SUPPORT_EVERY = 10') -and ($appText -match 'launches % SUPPORT_EVERY !== 0') -and
+     ($appText -match 'if \(supportOffered\) return false'))
+
+Assert-That 'the sponsor dialog names 爱发电 and links there' `
+    (($appText -match 'https://ifdian\.net/a/RedstoneOnline') -and ($appText -match '下次一定') -and
+     ($appText -match '去赞助'))
+
+# 关闭回调必须对每一种关闭方式都生效（知道了 / Esc / 点遮罩）。只认「知道了」的话，用 Esc 关掉
+# 那次房间弹窗的用户就永远等不到感谢提示 —— 而它的触发条件十年才轮一次。
+Assert-That 'every dialog can report that it was closed' `
+    (($appText -match 'function openDialog\(html, after, wide, onClose\)') -and
+     ($appText -match 'if \(onClose\) onClose\(\)'))
+
+# 弹窗会「落到指针底下」：房间弹窗是按下开启房间约 200ms 后才出现的，双击的第二下、或者被遮挡后
+# 重试的自动化点击，都会落在遮罩上把它关掉。这不是洁癖，是实测复现过的 —— 遮罩关闭因此有 350ms
+# 的冷静期。
+Assert-That 'a dialog cannot be dismissed by the click that opened it' `
+    ($appText -match 'Date\.now\(\) - openedAt < 350')
+
+# ---------------------------------------------------------------------------
+# asset/ 里只放会被请求的文件。
+#
+# 这条不是洁癖。`web/` 是**被服务的目录**（`--web-dir web` 下磁盘层会发任何文件），而
+# `web/asset/` 里每一张 webp 又都 `include_bytes!` 进二进制 —— 一个没人引用的文件既是
+# 多余的可取路径，也是每个用户都要下载的体积。写这条检查时它当场抓到一张：640×360 的
+# hero 缩略图切好了、字段也留着，但没有任何代码读它（只有注释说「还没用上」）。
+#
+# 未用的切图和源图现在放在 `artwork/`：仓库里留着，但不在被服务的树里，也不进二进制。
+$shipped = @(Get-ChildItem (Join-Path $webDir 'asset') -File | Select-Object -ExpandProperty Name)
+$requesters = $appText + "`n" + $pagesText + "`n" + `
+    [IO.File]::ReadAllText((Join-Path $webDir 'main.css')) + "`n" + `
+    [IO.File]::ReadAllText((Join-Path $webDir 'index.html'))
+$unused = @($shipped | Where-Object { $requesters -notmatch [regex]::Escape($_) })
+Assert-That 'every file in asset/ is requested by something' ($shipped.Count -ge 10 -and $unused.Count -eq 0) `
+    ("unused: " + ($unused -join ', ') + " / shipped: " + ($shipped -join ', '))
+
+# 引导里那个「不知道什么是游戏端口？点我」必须落在刚写好的这一页上。它以前指向设置页，
+# 因为那一页还不存在；现在存在了，指向别处就是把人送去一个不回答问题的页面。
+Assert-That 'the guide sends the port question to the help page' `
+    (($appText -match 'href="/help/port"') -and ($appText -match 'guide-link'))
+# 同理，联机页上的常驻入口（引导只出现一次，第二次得有别的地方能点进来）。
+Assert-That 'the connect page has a way back to the help page' `
+    ($pagesText -match 'class="room-link" href="/help/port"')
+
+# ---------------------------------------------------------------------------
+# The first-run guide.
+#
+# A guide is the easiest thing in an interface to get subtly wrong and the hardest to
+# notice being wrong, because the failure mode is "it points at nothing" or "its one
+# instruction cannot be carried out" and both of those look like a working app. These
+# are source checks for the same reason the block above is: a running client cannot
+# see them.
+
+$appCss = [IO.File]::ReadAllText((Join-Path $webDir 'app.css'))
+$guideScript = $appText + "`n" + $appCss
+
+# The spotlight is three parts - the hole, the card, and the overlay that holds them -
+# and each has to be styled or the dimming silently becomes a full-screen blank.
+Assert-That 'the guide is a spotlight, not a second page' `
+    (($appCss -match '\.guide\s*\{') -and ($appCss -match '\.guide-ring\s*\{') -and
+     ($appCss -match '\.guide-card\s*\{'))
+
+# The property the whole design turns on. The user is told to click the real 联机 link
+# and the real 开启房间 button, so nothing the guide draws over the page may take an
+# input event; the one exception is the card, which carries 跳过 and 知道了 and has to
+# be clickable to be worth drawing.
+Assert-That 'the spotlight lets a click through to the page' `
+    (($appCss -match '\.guide\s*\{[^}]*pointer-events:\s*none') -and
+     ($appCss -match '\.guide-card\s*\{[^}]*pointer-events:\s*auto'))
+
+# `.guide-hit` was a transparent rectangle over the lifted control, added to "let the
+# click through" and doing the exact opposite: it sat on top of the link, so the click
+# landed on the rectangle, step 1 could never be advanced by doing what it said, and a
+# click on the dimmed page never dismissed anything either, because the overlay that
+# was listening for it had pointer-events:none.
+Assert-That 'the click-eating layer over the lifted control is gone' `
+    ($guideScript -notmatch 'guide-hit')
+
+$stepsBlock = [regex]::Match($appText, 'var GUIDE_STEPS = \[[\s\S]*?\n  \];').Value
+Assert-That 'the guide has four steps, and they are readable' ($stepsBlock.Length -gt 200)
+Assert-That 'the guide has four steps' `
+    (@([regex]::Matches($stepsBlock, '(?m)^\s+target:')).Count -eq 4) `
+    ("targets: " + (@([regex]::Matches($stepsBlock, '(?m)^\s+target:')).Count))
+
+# The four controls the tour is about, in the order it walks them: the nav item that
+# switches page, the relay picker, the port row, the button that opens the room.
+Assert-That 'the four steps point at the four controls that matter' `
+    (($stepsBlock -match '\.nav-item\[data-page="connect"\]') -and ($stepsBlock -match '#room-relay') -and
+     ($stepsBlock -match '\.room-port-row') -and ($stepsBlock -match '#room-start'))
+
+# Step 2 is the one placement that is not a preference. The relay list opens downwards
+# out of the control the step points at, so a card under it does not merely look
+# cluttered - it covers the list the user was just told to read, and the rows under it
+# cannot be clicked at all. Step 4 is the same problem at the other end of the window:
+# there is no room under the button, and "above" lands on the two controls the step's
+# own sentence names.
+Assert-That 'the two steps that need a placement get one' `
+    (($stepsBlock -match 'target: "#room-relay",[\s\S]{0,400}?where: "above"') -and
+     ($stepsBlock -match 'target: "#room-start",[\s\S]{0,400}?where: "top"'))
+
+# "Was this click aimed at the lifted control?" is answered from the coordinates, and
+# it has to be: every page here replaces its own contents on each store publication,
+# and a replacement between press and release makes the browser retarget the click at
+# the common ancestor - a press the user aimed at the relay picker arrives with
+# `#room-body` as its target, and a test based on `target.contains` then reads it as a
+# click on the dimmed page and ends the tour mid-step.
+$insideBlock = [regex]::Match($appText, 'function guideInside\(event\)[\s\S]*?\n  \}').Value
+Assert-That 'the guide decides "outside" from coordinates, not from the DOM' `
+    (($insideBlock -match 'clientX') -and ($insideBlock -match 'getBoundingClientRect'))
+Assert-That 'an open list counts as part of the control that opened it' `
+    ($insideBlock -match 'picker-list')
+
+# Two ways out and two meanings. 跳过, Escape and reaching the end are the user saying
+# they are done; a stray click on the dimmed page is not, and the step-3 link walks off
+# to read the help before the last step has been seen. Only the first kind writes the
+# flag, so a misclick does not cost somebody the rest of the tour.
+Assert-That 'a deliberate exit is remembered and an accidental one is not' `
+    (($appText -match 'finishGuide\(true\)') -and ($appText -match 'finishGuide\(false\)') -and
+     ($appText -match 'if \(remember\) rememberGuideSeen\(\)'))
+Assert-That 'the guide shows on a first run and remembers it' `
+    (($appText -match 'hongshi\.shell\.guide\.seen') -and
+     ($appText -match 'function announceGuide\(\)[\s\S]{0,300}?rememberGuideSeen\(\)'))
+
+# Every step has to be escapable without doing what it says: step 4 points at a button
+# that is `disabled` until a kernel is installed, and a disabled button dispatches no
+# click event at all, so a step that could only be finished by pressing it would be a
+# step that cannot be finished.
+Assert-That 'every step can be dismissed where it stands' `
+    (($appText -match 'guide-skip') -and ($appText -match 'nextLabel'))
+
+# The startup notice asks the official site for the latest version and speaks only when
+# there is a newer one the user has not been told about. Three answers, one of them
+# worth a modal: "已是最新" is not news and a failed check is not the user's problem.
+Assert-That 'the update notice is once per version, and quiet otherwise' `
+    (($appText -match 'hongshi\.shell\.update\.seen') -and
+     ($appText -match 'body\.update !== true \|\| !body\.remote') -and
+     ($appText -match 'if \(updateSeen\(body\.remote\)\) return'))
 
 # ---------------------------------------------------------------------------
 

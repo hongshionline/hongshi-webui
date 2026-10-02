@@ -370,10 +370,19 @@ fn the_page_is_a_page_every_time_it_is_asked_for() {
     assert_eq!(header_value(&ok, "cache-control"), Some("no-store"));
 
     // Served verbatim, not rewritten on the way out.
-    assert!(
-        body(&ok).contains(r#"href="main.css""#),
-        "the page's asset references were rewritten: {}",
-        body(&ok)
+    //
+    // This used to assert that the body contained `href="main.css"`, which was evidence
+    // of "not rewritten" back when the page was rewritten in flight to inject a session
+    // token. All that survived was the literal, and it had stopped meaning anything: the
+    // day the asset references became absolute — they have to be, because a route like
+    // `/help/port` resolves a relative `main.css` against `/help/` and the page arrives
+    // with no stylesheet and no script — this failed against a page that was being served
+    // perfectly verbatim. Comparing with the file on disk says what the test is named
+    // after, and cannot go stale the next time the markup changes.
+    assert_eq!(
+        body(&ok),
+        include_str!("../web/index.html"),
+        "the served page is not the file on disk"
     );
 }
 
@@ -383,7 +392,13 @@ fn assets_are_served_and_a_range_request_gets_206() {
 
     let css = shell.get("/main.css");
     assert!(status_line(&css).contains("200"), "{css}");
-    assert!(body(&css).contains("--ground: #313131"), "{}", body(&css));
+    // The token names, not a colour: this asserts the served stylesheet is the real
+    // design system rather than an empty or truncated file, and it used to pin the
+    // old grey ground. A literal hex here fails on every palette change for no reason.
+    let stylesheet = body(&css);
+    for token in ["--ground:", "--plate:", "--signal:"] {
+        assert!(stylesheet.contains(token), "main.css lost {token}: {stylesheet}");
+    }
 
     let js = shell.get("/app.js");
     assert!(status_line(&js).contains("200"), "{js}");

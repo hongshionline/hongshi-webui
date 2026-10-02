@@ -388,6 +388,10 @@ pub struct ServerContext {
     pub site: Arc<crate::site::SiteState>,
     /// Which HTTP backend this build uses, shown in the settings page.
     pub http_backend: &'static str,
+    /// Which launch this is, counted by [`crate::launch`] at startup. The page asks for
+    /// it exactly once, to decide whether this is a round number worth saying thank you
+    /// on; nothing else reads it.
+    pub launches: u64,
 }
 
 impl ServerContext {
@@ -853,6 +857,8 @@ fn route(
             "/api/daily-news" => daily_news(context),
             "/api/version" => version_endpoint(context),
             "/api/nodes" => nodes_endpoint(context, &request.query),
+            "/api/ports/detect" => ports_detect_endpoint(context, &request.query),
+            "/api/sessions" => sessions_endpoint(&request.query),
             "/api/probe" => probe_endpoint(body),
             "/api/tunnel/start" => tunnel_endpoint(context, "start", &body),
             "/api/tunnel/stop" => tunnel_endpoint(context, "stop", &body),
@@ -1382,6 +1388,85 @@ fn parse_host_list(body: &str) -> Vec<String> {
         .collect()
 }
 
+/// The local game port, auto-detected.
+///
+/// No query parameters any more: this reads the machine rather than a preference, and what
+/// it looked at is in the answer. See [`crate::ports`] for the three steps and for why the
+/// identification is process ownership rather than a Minecraft protocol handshake.
+fn ports_detect_endpoint(_context: &ServerContext, _query: &str) -> Response {
+    let found = crate::ports::detect();
+    let list = |values: &[u16]| {
+        values
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let pids = found
+        .java_pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    Response::json(format!(
+        r#"{{"state":"ok","port":{},"source":"{}","java_pids":[{pids}],"checked":[{}],"skipped":[{}]}}"#,
+        found.port,
+        found.source,
+        list(&found.checked),
+        list(&found.skipped),
+    ))
+}
+
+/// The session history, aggregated to one row per day for the heat map.
+///
+/// `days` is the window, defaulted to the 18 weeks the calendar draws. Nothing here
+/// is per-session: the page's only question is "how much did I play on this day", and
+/// sending the raw records would put a file's worth of detail on the wire for a graph
+/// that cannot show it.
+fn sessions_endpoint(query: &str) -> Response {
+    const DEFAULT_DAYS: u64 = 126;
+    let days = query_number(query, "days")
+        .filter(|days| (1..=366).contains(days))
+        .unwrap_or(DEFAULT_DAYS) as u32;
+    let rows = crate::sessions::daily(days);
+    let body = rows
+        .iter()
+        .map(|row| {
+            format!(
+                r#"{{"date":"{}","seconds":{},"sessions":{},"level":{}}}"#,
+                escape_json(&row.date),
+                row.seconds,
+                row.sessions,
+                row.level
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    Response::json(format!(
+        r#"{{"state":"ok","days":{days},"today":"{}","file":"{}","rows":[{body}]}}"#,
+        escape_json(&crate::util::date_from_days((crate::util::unix_seconds() / 86_400) as i64)),
+        escape_json(&crate::sessions::primary_path().display().to_string()),
+    ))
+}
+
+/// One numeric query parameter, by name.
+///
+/// Deliberately narrow: a name match, one `=`, and digits. Anything else is absent,
+/// which is what the callers' defaults are for — a malformed window should draw the
+/// normal window, not fail the request.
+fn query_number(query: &str, name: &str) -> Option<u64> {
+    for pair in query.split('&') {
+        // `continue`, not `?`: a parameter with no `=` is a reason to look at the next
+        // pair, not to abandon the search — `?` here would make `?a&days=30` come back
+        // empty, which is the kind of bug that only shows up on someone else's URL.
+        let Some((key, value)) = pair.split_once('=') else { continue };
+        if key == name {
+            return value.trim().parse().ok();
+        }
+    }
+    None
+}
+
 /// Pull one `"name": value` field out of a small request body.
 ///
 /// A string value is unquoted; anything else is returned as written, so a number
@@ -1725,6 +1810,7 @@ fn health(context: &ServerContext) -> Response {
             "\"time\":\"{}\",",
             "\"pid\":{},",
             "\"uptime_seconds\":{},",
+            "\"launches\":{},",
             "\"url\":\"{}\",",
             "\"web_source\":\"{}\",",
             "\"kernel\":{}}}"
@@ -1734,6 +1820,7 @@ fn health(context: &ServerContext) -> Response {
         crate::util::iso8601_utc(),
         std::process::id(),
         context.started.elapsed().as_secs(),
+        context.launches,
         escape_json(&context.url),
         escape_json(&context.web_source),
         kernel_json(&kernel),
@@ -1819,6 +1906,7 @@ mod tests {
             settings: Arc::new(std::sync::RwLock::new(crate::config::Settings::default())),
             site: Arc::new(crate::site::SiteState::new()),
             http_backend: "test",
+            launches: 10,
         }
     }
 
@@ -2352,6 +2440,16 @@ mod tests {
         // about the shape rather than the value.
         assert!(body.contains("\"found\":true") || body.contains("\"found\":false"), "{body}");
         assert!(body.contains("\"expected_file\":\"hongshic-"), "{body}");
+    }
+
+    #[test]
+    fn health_reports_the_launch_number_the_page_reads() {
+        // The page asks for this once, when a room's dialog is dismissed, to decide
+        // whether this is a round launch. A missing field would silently mean "never a
+        // round number", which is a feature that looks like it works and never fires.
+        let ctx = context();
+        let body = String::from_utf8(health(&ctx).body).unwrap();
+        assert!(body.contains("\"launches\":10"), "{body}");
     }
 
     #[test]

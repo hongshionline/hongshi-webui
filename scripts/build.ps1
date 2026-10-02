@@ -276,6 +276,30 @@ function Build-One([string]$label) {
         $target = Join-Path $CopyTo "hongshi-$label$($MATRIX[$label].ext)"
         Copy-Item $exe $target -Force
         Write-Host ("  copied to {0}" -f $target)
+        # Printed here rather than left to whoever uploads it: the hash of the artifact is
+        # the only thing that can prove the file that reached the server is the file that
+        # was built, and asking for it after the fact means rebuilding.
+        $hash = (Get-FileHash $target -Algorithm SHA256).Hash.ToLower()
+        Write-Host ("  sha256   {0}" -f $hash)
+    }
+}
+
+# Runtime state must not be published with the binaries, and it *will* be sitting in the
+# staging directory if anybody ran the artifact from there — the shell writes these three
+# beside its own executable, which is the whole point of them. A settings file carries the
+# service address and any proxy the user configured, and a launch counter is nobody's
+# business; both would be served to every visitor.
+#
+# This is not hypothetical: `dist/` grew a `{"count":1}` between one packaging run and the
+# next, because the Windows build had been started from that folder to see it work.
+$stateFiles = @('hongshi.settings.json', 'hongshi.launches.json', 'hongshi.sessions.json')
+if ($CopyTo) {
+    $stray = @($stateFiles | Where-Object { Test-Path (Join-Path $CopyTo $_) })
+    if ($stray.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  WARNING: $CopyTo holds runtime state that must not be uploaded:" -ForegroundColor Yellow
+        foreach ($name in $stray) { Write-Host "    $name" -ForegroundColor Yellow }
+        Write-Host "  The shell writes these beside its executable. Delete them first." -ForegroundColor Yellow
     }
 }
 

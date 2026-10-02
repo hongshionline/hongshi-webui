@@ -44,9 +44,23 @@ pub mod browser;
 pub mod config;
 pub mod http_server;
 pub mod kernel;
+pub mod launch;
 pub mod log;
 pub mod net;
 pub mod options;
+/* Both halves of the port discovery are compiled on every platform, on purpose: they are
+   covered by unit tests that parse `netstat` / `ss` / `tasklist` output as text, and a
+   `#[cfg]` on the functions would take those tests with it. What a given platform cannot
+   have is a *caller* for the other half — `listeners_windows` and `process_names` have no
+   caller on Linux, `listeners_unix` has none on Windows — so the dead-code lint is
+   silenced for the module rather than the code being hidden from the test run.
+
+   This was `cfg_attr(windows, allow(dead_code))`, which fixed one direction and left the
+   other: the linux-amd64 release build warned about the Windows helpers. The tests are the
+   only caller either way, and which platform you are on decides which half that is. */
+#[allow(dead_code)]
+pub mod ports;
+pub mod sessions;
 pub mod site;
 pub mod util;
 
@@ -142,6 +156,12 @@ impl Shell {
         // cannot: everything else works, and the 联机 page offers the download.
         let kernel = Arc::new(crate::kernel::Kernel::discover());
 
+        // Counted here and not when a page loads: "第 N 次启动" is about the client, and
+        // the page is one of several browsers that might be pointed at it. Bumped once,
+        // after the listener is up, so a failed start (a port already in use) does not
+        // count as a launch.
+        let launches = crate::launch::bump();
+
         let context = ServerContext {
             url: url.clone(),
             assets,
@@ -151,6 +171,7 @@ impl Shell {
             settings: Arc::new(std::sync::RwLock::new(settings)),
             site: Arc::new(crate::site::SiteState::new()),
             http_backend: crate::http_server::http_backend_name(),
+            launches,
         };
         let server = Server::new(listener, context);
 

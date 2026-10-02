@@ -139,26 +139,42 @@ pub fn install_app_dir(dir: PathBuf) -> Result<(), String> {
         .map_err(|_| "the application directory is already set".to_string())
 }
 
-/// Where the settings file lives, and where it would live if the first choice is
-/// not writable.
-pub fn settings_paths() -> (PathBuf, PathBuf) {
+/// The two directories this crate may write to, primary first.
+///
+/// Factored out because the session history ([`crate::sessions`]) writes a second
+/// file with the same two-step policy, and the policy is the interesting part: the
+/// primary is read-only on Android (`/system/bin`), so a host that knows where its
+/// own data goes says so through [`install_app_dir`], and everything else falls back
+/// to the home directory rather than failing to persist.
+pub fn base_dirs() -> (PathBuf, PathBuf) {
     if let Some(dir) = APP_DIR.get() {
         // The host's directory is the writable one by construction, so the fallback
         // is only here to keep this function's shape: it is reported rather than
         // silently retried if the primary write ever fails.
-        return (dir.join(SETTINGS_FILE), std::env::temp_dir().join(SETTINGS_FILE));
+        return (dir.clone(), std::env::temp_dir());
     }
 
     let beside = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join(SETTINGS_FILE)))
-        .unwrap_or_else(|| PathBuf::from(SETTINGS_FILE));
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."));
 
-    let home = std::env::var_os("USERPROFILE")
+    let home = home_dir().unwrap_or_else(std::env::temp_dir);
+    (beside, home)
+}
+
+/// The user's home directory, if the environment names one.
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    (beside, home.join(SETTINGS_FILE))
+}
+
+/// Where the settings file lives, and where it would live if the first choice is
+/// not writable.
+pub fn settings_paths() -> (PathBuf, PathBuf) {
+    let (primary, fallback) = base_dirs();
+    (primary.join(SETTINGS_FILE), fallback.join(SETTINGS_FILE))
 }
 
 /// The file's name, in the one place both branches read it from.

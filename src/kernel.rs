@@ -520,6 +520,8 @@ impl Kernel {
                 // though a killed process reports the same exit code as one that
                 // never reached the relay.
                 inner.state = if asked { RunState::Stopped } else { RunState::Exited };
+                let ran_for = inner.started_at.map(|started| started.elapsed().as_secs());
+                let game_port = inner.game_port;
                 inner.started_at = None;
                 let info = if asked { ExitInfo::stopped(code) } else { ExitInfo::from_code(code) };
                 self.push(
@@ -533,6 +535,30 @@ impl Kernel {
                     },
                 );
                 inner.exit = Some(info);
+
+                // The session history, and this is the only place it is written from.
+                //
+                // `reap` runs on every status poll and on the reaper thread, so the
+                // guard is that it only reaches here on the transition out of Running:
+                // `child` was taken above, so a second pass returns at the top. The
+                // write happens outside the lock, because a full-file rewrite under the
+                // mutex would block every other request on this process — including the
+                // health poll the page makes every three seconds.
+                if let (Some(seconds), Some(port)) = (ran_for, game_port) {
+                    if seconds >= crate::sessions::MIN_SECONDS {
+                        let session = crate::sessions::Session {
+                            started_at: crate::util::unix_seconds().saturating_sub(seconds),
+                            seconds,
+                            game_port: port,
+                            outcome: if asked { "stopped" } else { "exited" },
+                        };
+                        if let Err(reason) = crate::sessions::record(&session) {
+                            // Not fatal and not the user's problem mid-session: the
+                            // tunnel worked, only the tally was lost.
+                            crate::log::warn_fields("could not record the session", &[("reason", &reason)]);
+                        }
+                    }
+                }
             }
             Ok(None) => {}
             Err(err) => {

@@ -21,6 +21,14 @@
   var icon = S.icon;
   var esc = S.escapeHtml;
 
+  /* The relay store, held here rather than inside a page.
+   *
+   * It is a shell-level singleton — read once at startup, re-probed on demand — and
+   * more than one page needs the same rows: 联机 builds its picker from them, and
+   * `pickerRows()` below is the single place that decides what a row looks like.
+   * Declaring it per page would give two pages two ideas of what a node is called. */
+  var store = S.nodes;
+
   /* --------------------------------------------------------------- helpers */
 
   function pageHead(title, sub) {
@@ -46,6 +54,88 @@
   function notice(iconName, html, tone) {
     return '<div class="notice' + (tone ? " notice--" + tone : "") + '">' +
       icon(iconName) + "<div>" + html + "</div></div>";
+  }
+
+  /* ------------------------------------------------------ relay list, shared */
+
+  /**
+   * Which of the four readings a node's probe produced.
+   *
+   * `probe_state` is the shell's own verdict and the only field that distinguishes
+   * 可建隧道 from 仅能 ping 通; `reachable` is the older, blunter one, and the latency
+   * ladder is the fallback for a node the probe has not answered for yet.
+   */
+  function nodeState(node) {
+    return node.probe_state || (node.reachable === false ? "dead" : S.latencyState(node.latency_ms));
+  }
+
+  function stateLabel(state) {
+    return S.NODE_STATE[state] || S.LATENCY_LABEL[state] || "";
+  }
+
+  /**
+   * Every choice, as data: the row the button shows and the rows the list shows.
+   *
+   * `自动选择` carries no hostname — its second line is the promise it makes — and a
+   * node carries its own plus whatever the probe said about why it is unusable. Both
+   * 联机's picker and its trigger read from here, which is what keeps the closed button
+   * and the open list from disagreeing about what exists.
+   */
+  function pickerRows() {
+    var best = store.best();
+    var rows = [{
+      value: "auto",
+      name: "自动选择",
+      host: "",
+      note: "挑延迟最低的可用节点",
+      ms: best ? best.latency_ms : null,
+      state: best ? nodeState(best) : "unknown",
+    }];
+    store.nodes.forEach(function (node) {
+      rows.push({
+        value: node.host,
+        name: node.region || node.host,
+        host: node.host,
+        note: node.probe_reason || "",
+        ms: node.latency_ms,
+        state: nodeState(node),
+      });
+    });
+    return rows;
+  }
+
+  /** The filename the client is looking for, straight from the kernel's own report. */
+  function kernelExpected() {
+    var kernel = S.kernel.info;
+    if (kernel && kernel.expected_file) return kernel.expected_file;
+    return "hongshic";
+  }
+
+  /**
+   * What to tell the user when the kernel is not there — and what to let them do.
+   *
+   * The client cannot open a room without `hongshic`, and downloading one is a real
+   * decision, so the notice carries the button rather than only reporting the absence.
+   * The download goes through the *shell* (`/api/kernel/download`), not through a
+   * browser link, and that is deliberate: a browser download lands in the user's
+   * Downloads folder and the client would still not find it. The shell fetches the
+   * build for this platform from the official endpoint and writes it into `core/`
+   * beside the executable, which is where `kernel::locate` looks.
+   *
+   * This existed before and was lost when 联机 was rewritten — the old page had both the
+   * notice and the button, and the rewrite kept the notice and dropped the button, which
+   * left a page that said "no kernel" with nothing to press. The flow is now stated in
+   * the notice itself so the next rewrite has less to lose.
+   */
+  function kernelNotice(kernel) {
+    var dir = (kernel && kernel.core_dir) || "core";
+    var platform = kernel && kernel.platform ? kernel.platform + "-" + kernel.arch : "当前平台";
+    return notice("warn",
+      "<strong>还没有下载内核 <code>" + esc(kernelExpected()) + "</code>。</strong>" +
+      "开房间要靠它，客户端只负责把它跑起来。<br>" +
+      "当前平台 <code>" + esc(platform) + "</code> · 会装到 <code>" + esc(dir) + "</code>。") +
+      '<button type="button" class="btn btn--primary room-kernel-download" data-act="kernel">' +
+      icon("download", "icon--sm") + "自动下载内核</button>";
   }
 
   /**
@@ -117,8 +207,11 @@
       '<span class="pill pill--tag" data-state="warn"><span class="pill-dot"></span>' +
       '<span class="pill-text">实验性</span></span></div>' +
       "<h3>此功能暂不对外开放</h3>" +
-      "<p>请您关注<strong>每日资讯</strong>以获得最新消息。下面的功能是计划中的样子，" +
-      "不代表已经可用。</p>" +
+      // This used to point at 每日资讯 on 首页, which is no longer there — the feed
+      // came off the home page with the rest of the daily content. Saying "watch the
+      // news" when there is no news is worse than saying nothing, so it says nothing
+      // and the card's own list is what describes the plan.
+      "<p>下面的功能是计划中的样子，不代表已经可用。</p>" +
       (entry[1].length
         ? '<ul class="soon-list">' + entry[1].map(function (line) {
             return "<li>" + esc(line) + "</li>";
@@ -126,19 +219,11 @@
         : "") +
       '<div class="soon-actions">' +
       '<button type="button" class="btn btn--ghost" data-go="home">回到主页</button>' +
-      '<button type="button" class="btn btn--ghost" data-go="home-news">看每日资讯</button>' +
       "</div>" +
       "</div>";
 
     el.querySelectorAll("[data-go]").forEach(function (button) {
-      button.addEventListener("click", function () {
-        S.go("home");
-        // The second button lands on the news, which is the answer to "when".
-        var target = document.getElementById("news");
-        if (button.dataset.go === "home-news" && target) {
-          target.scrollIntoView({ behavior: "smooth", block: "start" });
-        }
-      });
+      button.addEventListener("click", function () { S.go("home"); });
     });
     return { title: titles[name] || "敬请期待" };
   }
@@ -146,289 +231,435 @@
   /* ------------------------------------------------------------------ home */
 
   function homePage(el) {
-    // Minecraft 资讯 leads. It is the only part of this page that changes on its own
-    // and the only part with something to say when nothing is set up yet, so it goes
-    // above the fold; the services and the session facts are reference material.
+    /*
+     * The games the carousel rotates through.
+     *
+     * Declared before the markup is built, not next to the function that reads it:
+     * `gameCarousel()` is called while `el.innerHTML` is being assembled, and a
+     * `var` beside its own function is still in its temporal dead zone at that
+     * moment — hoisted as `undefined`, so `GAMES.map` threw and the page rendered
+     * as the router's error notice.
+     *
+     * One game today, so one card and no dots: a single dot is furniture. The
+     * rotation is written anyway, with the interval only started for more than one
+     * card — the second game is meant to be a data edit, not a rewrite.
+     */
+    var GAMES = [
+      {
+        tag: "本家联机",
+        title: "Minecraft",
+        note: "Java 版与基岩版都在同一个隧道里。建好隧道，把地址发给朋友就行。",
+        art: "asset/hero-minecraft.webp",
+        // There is a 640x360 cut of this in `artwork/` beside the crate, for a narrow
+        // window. It is deliberately *not* in `web/asset/`: nothing reads it yet, that
+        // directory is exactly the set of files the browser can ask for, and every file
+        // in it is also `include_bytes!`-ed into the binary — so a cut nobody requests is
+        // download weight for every user. Switching to it means moving the file back and
+        // adding either a `<picture>` or a media query here.
+      },
+    ];
+
+    /*
+     * Like several other layouts here, this is "a grid with a variable number of
+     * items", which CSS does with `repeat(auto-fill, minmax())`. It is not
+     * `repeat(auto-fit, …)`: `auto-fit` collapses the empty tracks and makes the
+     * last card stretch to the full width, so a two-game row would render as one
+     * wide card and one normal one. `auto-fill` leaves the empty track alone.
+     */
+    /*
+     * The heading is not a page title any more. It was `pageHead("首页", "…")` — a page
+     * named after the tab you are already on, over a sentence describing the board you
+     * are already looking at — and both were furniture in the most expensive place on
+     * the page. A calendar glyph and the section's own name say the same thing in one
+     * line, and the item is not a destination link, so it is a div rather than an
+     * anchor: there is nowhere for 页面链接 to go.
+     */
     el.innerHTML =
-      pageHead("主页", "红石联机的本地客户端。这里有 Minecraft 的最新消息，以及你的服务与用量。") +
+      '<header class="board-head">' +
+      '<span class="board-icon" aria-hidden="true">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="3" y="4.5" width="18" height="16" rx="2.5"></rect>' +
+      '<path d="M3 9.5h18M8 2.5v4M16 2.5v4"></path>' +
+      "</svg>" +
+      "</span>" +
+      '<h1 class="board-title">游戏日历</h1>' +
+      "</header>" +
       '<section class="section section--first">' +
-      '<h2 class="section-title">' + icon("info") + "Minecraft 资讯" +
-      '<span class="pill" id="news-state" data-state="busy" style="margin-left:auto">' +
-      '<span class="pill-dot"></span><span class="pill-text" id="news-state-text">读取中…</span></span>' +
-      "</h2>" +
-      '<div class="news" id="news"></div>' +
-      '<p class="section-note" id="news-note"></p>' +
-      "</section>" +
-      section("服务", "link", '<div class="usage" id="usage"></div>',
-        "三项服务共用同一个账号体系与节点列表。联机已经可用，云存档与租聘服还没上线，"
-        + "所以它们现在显示「不可用」。") +
-      section("当前会话", "info", '<dl class="kv" id="session-kv"></dl>');
+      '<div class="home-top">' + heatCalendar() + gameCarousel() + "</div>" +
+      "</section>";
 
-    var state = el.querySelector("#news-state");
-    var stateText = el.querySelector("#news-state-text");
-    var note = el.querySelector("#news-note");
-    var news = el.querySelector("#news");
-    var sessionKv = el.querySelector("#session-kv");
+    var carousel = startCarousel(el);
 
-    function renderState(title, body, stateName, stateLabel) {
-      news.innerHTML = '<article class="news-card news-card--state">' +
-        '<p class="news-title">' + esc(title) + "</p>" +
-        '<p class="news-body">' + body + "</p>" +
-        "</article>";
-      if (state) state.dataset.state = stateName;
-      if (stateText) stateText.textContent = stateLabel;
-    }
+    /* The graph is drawn asynchronously — it is a read of the shell's history, not
+     * something this page can compute — and refreshed on a slow timer so a session
+     * that is still running fills in today's square while the user watches. Thirty
+     * seconds rather than one: the bucket only changes at 30 minutes, so the only thing
+     * a faster tick buys is a request per second for a number that has not moved. */
+    drawHeat();
+    var heatTimer = window.setInterval(function () {
+      if (S.tunnel.tunnel) drawHeat();
+    }, 30000);
 
-    function renderNews(body) {
-      var items = Array.isArray(body) ? body
-        : (body && Array.isArray(body.items)) ? body.items
-        : (body && Array.isArray(body.news)) ? body.news
-        : (body && Array.isArray(body.data)) ? body.data
-        : null;
-
-      if (!items || items.length === 0) {
-        renderState("今天的资讯还没有到", "接口有了回应，但里面没有可显示的内容。", "ok", "接口正常");
-        return;
-      }
-
-      news.innerHTML = items.slice(0, 12).map(function (item) {
-        var title = item.title || item.name || "未命名";
-        var text = item.text || item.summary || item.body || item.content || item.desc || "";
-        var tag = item.tag || item.category || "资讯";
-        var when = item.time || item.date || item.published_at || item.ts || "";
-        var link = safeLink(item.link || item.url || "");
-        var image = newsImage(item);
-
-        // No image: a plain card, text only. With one: the picture leads at the
-        // card's top, full width, then the text under it.
-        return '<article class="news-card' + (image ? " news-card--media" : "") + '">' +
-          (image
-            ? '<div class="news-media"><img src="' + esc(image) +
-              '" alt="" loading="lazy" referrerpolicy="no-referrer"></div>'
-            : "") +
-          '<div class="news-card-body">' +
-          '<span class="news-tag">' + esc(tag) + "</span>" +
-          '<h3 class="news-title">' + esc(title) + "</h3>" +
-          (text ? '<p class="news-body">' + esc(text) + "</p>" : "") +
-          "</div>" +
-          (when || link
-            ? '<div class="news-foot">' +
-              (when ? '<span class="news-when">' + icon("clock", "icon--sm") + esc(when) + "</span>" : "") +
-              (link
-                ? '<a class="news-link" href="' + esc(link) +
-                  '" target="_blank" rel="noreferrer noopener">阅读原文</a>'
-                : "") +
-              "</div>"
-            : "") +
-          "</article>";
-      }).join("");
-      if (state) state.dataset.state = "ok";
-      if (stateText) stateText.textContent = items.length + " 条";
+    /*
+     * ---------------------------------------------------------------- heat map
+     *
+     * A calendar heat map, one cell per day, one column per week — the GitHub
+     * contribution graph applied to "how much did I play". It is a record of days, so
+     * it reads as a calendar: 7 rows fixed, weeks growing left to right, months
+     * labelled along the top.
+     *
+     * The data is real: `/api/sessions` reports one row per day, aggregated by the
+     * shell from `hongshi.sessions.json`, which `kernel::reap` writes when a tunnel
+     * ends. That is the important part of the design — the *kernel* records the
+     * session, not this page, so a browser closed mid-session cannot lose the time and
+     * a page reload cannot double-count it. See `src/sessions.rs`.
+     *
+     * The first version of this graph invented its data, because there was no history
+     * to draw. That generator is gone; the only thing still synthetic here is nothing.
+     */
+    function heatCalendar() {
+      return '<div class="heat" id="heat">' +
+        '<div class="heat-head">' +
+        '<div class="heat-figures">' +
+        '<p class="heat-total" id="heat-total"></p>' +
+        '<p class="heat-sub" id="heat-sub"></p>' +
+        "</div>" +
+        '<div class="heat-legend"><span>少</span>' +
+        [0, 1, 2, 3, 4].map(function (level) {
+          return '<span class="heat-cell" data-level="' + level + '"></span>';
+        }).join("") +
+        "<span>多</span></div>" +
+        "</div>" +
+        '<div id="heat-body"><p class="heat-empty">正在读取记录…</p></div>' +
+        "</div>";
     }
 
     /**
-     * The picture a news item carries, from whichever field the server uses.
+     * The last N days, as whole weeks ending on the current one.
      *
-     * Only `http:` and `https:` are allowed through — `javascript:` in an `<img
-     * src>` must never reach the page even though a modern browser would refuse to
-     * run it. A relative path is deliberately *not* resolved here: the shell has
-     * already made every image absolute against the publisher, so one that is still
-     * relative is one this page cannot place, and completing it against 服务地址
-     * would fetch a Mojang picture from the hongshi site.
+     * The range starts on a Monday and ends on a Sunday so every column is a real
+     * week: a graph whose first and last columns are partial empties reads as missing
+     * data rather than as the edge of the window. `rows` is keyed by `YYYY-MM-DD` and
+     * may be empty — every day is then a quiet one, which is the honest picture of a
+     * client nobody has played on yet.
      */
-    function newsImage(item) {
-      var value = item.image || item.img || item.cover || item.thumbnail || item.picture || "";
-      if (typeof value === "object" && value) {
-        value = value.url || value.src || "";
-      }
-      return safeLink(value);
-    }
+    function heatData(rows, weeks) {
+      var days = [];
+      var today = new Date();
+      today.setHours(0, 0, 0, 0);
 
-    /** An `http(s)` URL, or empty. Used for every `src` and `href` a card writes. */
-    function safeLink(value) {
-      value = String(value || "").trim();
-      if (/^https?:\/\//i.test(value)) return value;
-      if (value.startsWith("//")) return "https:" + value;
-      return "";
-    }
+      var end = new Date(today);
+      end.setDate(end.getDate() + (6 - ((end.getDay() + 6) % 7)));
 
-    /*
-     * The news is Minecraft's own launcher feed, fetched by the shell and trimmed
-     * there: the upstream file is 64 KB of a hundred entries and the shell hands
-     * over the first few, with the pictures already made absolute. The page never
-     * talks to Mojang itself — a `fetch` from `http://127.0.0.1:<port>` to another
-     * origin is cross-origin, and `connect-src 'self'` says so.
-     */
-    S.apiJson("/api/daily-news").then(function (result) {
-      var body = result.body || {};
-      var where = body.source || "launchercontent.mojang.com";
-      note.textContent = "来自 " + where + "（前 " + (body.limit || 3) + " 条）";
+      var start = new Date(end);
+      start.setDate(start.getDate() - 7 * weeks + 1);
 
-      if (body.state === "ok") {
-        renderNews(body.data);
-        return;
-      }
-
-      // A 200 the shell could not read is a different thing from a request that did
-      // not complete, and neither is something the user did.
-      if (body.state === "empty") {
-        renderState("没读到任何一条资讯",
-          "接口有回应，但里面没有能认出来的资讯，可能是官方换了格式。", "down", "格式变化");
-        return;
-      }
-
-      renderState("没能取到资讯",
-        "请求没有完成：" + esc(body.reason || "原因未知") +
-        "。<br>可以在设置页检查代理设置。", "down", "取不到");
-    }).catch(function (err) {
-      renderState("没能取到资讯", "客户端没有响应：" + esc(String(err)), "down", "失败");
-    });
-
-    /*
-     * Services, one card each.
-     *
-     * The tunnel is a service like the other two, not a separate part of the page:
-     * 联机 is what it *is*, this is what it *costs you and where it stands*. So the
-     * three cards share one shape — icon, name, state, value, detail — and the
-     * tunnel's detail swaps between "nothing running" and its live address.
-     */
-    var servicesBox = el.querySelector("#usage");
-    var unsubscribe = S.tunnel.subscribe(renderServices);
-
-    /** A card that is not available yet, with the reason rather than just a mark. */
-    function unavailableCard(iconName, name, value, note, lines) {
-      return '<article class="usage-card" data-available="false">' +
-        '<div class="usage-top">' + icon(iconName) +
-        '<span class="usage-name">' + esc(name) + "</span>" +
-        '<span class="usage-state">' + icon("cross", "icon--sm") + "不可用</span></div>" +
-        '<div class="usage-value">' + esc(value) + "</div>" +
-        '<div class="meter"><span style="width:0"></span></div>' +
-        '<p class="usage-note">' + esc(note) + "</p>" +
-        '<div class="usage-lines">' + lines.map(function (line) {
-          return "<span>" + line + "</span>";
-        }).join("") + "</div>" +
-        "</article>";
-    }
-
-    function tunnelCard() {
-      var tunnel = S.tunnel.tunnel;
-      var age = S.tunnel.age();
-
-      if (!tunnel) {
-        return '<article class="usage-card" data-available="true">' +
-          '<div class="usage-top">' + icon("link") +
-          '<span class="usage-name">联机隧道</span>' +
-          '<span class="usage-state">' + icon("cross", "icon--sm") + "未开启</span></div>" +
-          '<div class="usage-value">当前没有隧道</div>' +
-          '<p class="usage-note">开启后这里显示连接地址、创建时间与运行时长，日志在右侧面板。</p>' +
-          '<div class="tunnel-actions">' +
-          '<button type="button" class="btn btn--primary btn--small" id="home-start">' +
-          icon("play", "icon--sm") + "开启隧道</button></div>" +
-          "</article>";
-      }
-
-      return '<article class="usage-card usage-card--live" data-available="true">' +
-        '<div class="usage-top">' + icon("link") +
-        '<span class="usage-name">联机隧道</span>' +
-        '<span class="usage-state usage-state--live">' + icon("check", "icon--sm") + "运行中</span></div>" +
-        '<div class="addr" data-assigned="' + (tunnel.endpoint ? "true" : "false") + '">' +
-        "<span>" + esc(tunnel.endpoint || "等待分配地址") + "</span>" +
-        (tunnel.endpoint
-          ? '<button type="button" class="addr-copy" id="home-copy" title="复制地址" aria-label="复制地址">' +
-            icon("copy", "icon--sm") + "</button>"
-          : "") +
-        "</div>" +
-        '<div class="usage-lines" style="margin-top:10px">' +
-        "<span>创建于 <b id=\"home-created\">" + esc(age === null ? "—" : S.relativeTime(age)) + "</b></span>" +
-        "<span>已运行 <b id=\"home-uptime\">" + esc(age === null ? "—" : S.duration(age)) + "</b></span>" +
-        "<span>节点 <b>" + esc(tunnel.node || "自动") + "</b></span>" +
-        "<span>方式 <b>" + esc(tunnel.mode || "中转 · TCP") + "</b></span>" +
-        "</div>" +
-        '<div class="tunnel-actions">' +
-        '<button type="button" class="btn btn--ghost btn--small" id="home-logs">' +
-        icon("info", "icon--sm") + "查看日志</button>" +
-        '<button type="button" class="btn btn--danger btn--small" id="home-stop">' +
-        icon("close", "icon--sm") + "关闭隧道</button>" +
-        "</div>" +
-        "</article>";
-    }
-
-    function renderServices() {
-      if (!servicesBox) return;
-      servicesBox.innerHTML =
-        tunnelCard() +
-        unavailableCard("disk", "云硬盘", "暂未接入红石云存档服务",
-          "接入后这里显示已用容量与总容量，以及各存档的占用。",
-          ["已用 <b>—</b>", "总量 <b>—</b>"]) +
-        unavailableCard("server", "云服务器", "暂未接入红石租聘服服务",
-          "接入后这里显示每台服务器的规格、地区与剩余时长。",
-          ["在用机器 <b>—</b>", "剩余时长 <b>—</b>"]);
-
-      var startButton = servicesBox.querySelector("#home-start");
-      if (startButton) {
-        startButton.addEventListener("click", function () { S.go("connect"); });
-      }
-      var copy = servicesBox.querySelector("#home-copy");
-      if (copy) {
-        copy.addEventListener("click", function () { S.copyText(S.tunnel.tunnel.endpoint, "连接地址"); });
-      }
-      var logs = servicesBox.querySelector("#home-logs");
-      if (logs) logs.addEventListener("click", function () { S.drawerOpen(true); });
-      var stop = servicesBox.querySelector("#home-stop");
-      if (stop) {
-        stop.addEventListener("click", function () {
-          stop.disabled = true;
-          stop.textContent = "正在关闭…";
-          S.tunnel.stop().then(renderServices);
+      for (var d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        var cell = new Date(d);
+        var key = heatKey(cell);
+        var row = rows[key] || null;
+        days.push({
+          date: cell,
+          // The level comes from the shell (`sessions::level`), so the graph and any
+          // other reader of the same file cannot disagree about what a colour means.
+          level: row ? row.level : 0,
+          seconds: row ? row.seconds : 0,
+          sessions: row ? row.sessions : 0,
+          future: cell > today,
+          today: cell.getTime() === today.getTime(),
         });
       }
+      return days;
     }
 
-    renderServices();
-
-    function renderSession() {
-      if (!sessionKv) return;
-      var health = S.health;
-      if (!health) {
-        sessionKv.innerHTML = "<dt>状态</dt><dd>正在读取…</dd>";
-        return;
-      }
-      var webSource = health.web_source === "embedded in the binary"
-        ? "内嵌在二进制里"
-        : esc(health.web_source);
-      var base = (S.settings && S.settings.api_base) || "读取中…";
-      sessionKv.innerHTML =
-        "<dt>客户端版本</dt><dd>" + esc(health.shell) + " " + esc(health.version) + "</dd>" +
-        "<dt>界面来源</dt><dd>" + webSource + "</dd>" +
-        "<dt>服务地址</dt><dd>" + esc(base) + "</dd>" +
-        "<dt>运行时长</dt><dd>" + esc(S.duration(health.uptime_seconds)) + "</dd>";
+    /** `YYYY-MM-DD` in local time, which is how the days are bucketed for display. */
+    function heatKey(date) {
+      var month = String(date.getMonth() + 1);
+      var day = String(date.getDate());
+      if (month.length < 2) month = "0" + month;
+      if (day.length < 2) day = "0" + day;
+      return date.getFullYear() + "-" + month + "-" + day;
     }
-    renderSession();
 
-    // The board is on screen; fill in the settings-derived row once they arrive.
-    // `loadSettings` answers from its cache when `boot()` already read them, which is
-    // the usual case: this is only here for the run where it has not.
-    S.loadSettings(false).then(function () { renderSession(); });
+    /**
+     * Fold the live tunnel into the rows, so a session still running shows up now.
+     *
+     * Only today is touched and only by addition: the file has no record for a session
+     * that has not ended, and a graph that stays grey all evening and then jumps is
+     * worse than one that fills in as you play. `Math.max` rather than `+=` on the
+     * level, because the level is a bucket and adding buckets is meaningless.
+     */
+    function withLiveTime(rows) {
+      var age = S.tunnel.age();
+      if (age === null || age <= 0) return rows;
+      var key = heatKey(new Date());
+      var row = rows[key] || { date: key, seconds: 0, sessions: 0, level: 0 };
+      row.seconds += age;
+      row.sessions += 1;
+      row.level = Math.max(row.level, liveSessionLevel(row.seconds));
+      rows[key] = row;
+      return rows;
+    }
 
-    return {
-      title: "主页",
-      onHealth: renderSession,
-      onTick: function () {
-        renderSession();
-        // Only the two counters are rewritten. Re-rendering the card every second
-        // would replace its buttons, and a button mid-click — or holding keyboard
-        // focus — does not survive being replaced.
-        var created = servicesBox ? servicesBox.querySelector("#home-created") : null;
-        var uptime = servicesBox ? servicesBox.querySelector("#home-uptime") : null;
-        var age = S.tunnel.age();
-        if (age !== null && created && uptime) {
-          created.textContent = S.relativeTime(age);
-          uptime.textContent = S.duration(age);
+    /**
+     * The same four edges as `sessions::level` in Rust, for the one number Rust cannot
+     * know: the session that is still running.
+     *
+     * Duplicating a scale in two languages is a smell, and it is the smaller one here.
+     * The alternative is a round trip on every tick to ask the shell what bucket a
+     * duration falls in, or not showing live time at all. The duplication is contained
+     * — four numbers, and a test on the Rust side pins them — and it is commented at
+     * both ends so the pair is findable.
+     */
+    function liveSessionLevel(seconds) {
+      if (seconds <= 0) return 0;
+      if (seconds < 1800) return 1;
+      if (seconds < 7200) return 2;
+      if (seconds < 18000) return 3;
+      return 4;
+    }
+
+    function heatStats(days) {
+      var total = 0;
+      var seconds = 0;
+      var sessions = 0;
+      var streak = 0;
+      var counting = true;
+      for (var i = days.length - 1; i >= 0; i--) {
+        var day = days[i];
+        if (day.future) continue;
+        if (day.seconds > 0 || day.level > 0) {
+          total++;
+          seconds += day.seconds;
+          sessions += day.sessions;
+          if (counting) streak++;
+        } else if (counting) {
+          // Today with nothing on it yet does not break a streak that is still
+          // running — the day is not over.
+          if (day.today) continue;
+          counting = false;
         }
-      },
-      destroy: function () {
-        unsubscribe();
       }
+      return { total: total, seconds: seconds, sessions: sessions, streak: streak };
+    }
+
+    function heatWeeks(days) {
+      var months = ["1月", "2月", "3月", "4月", "5月", "6月", "7月",
+        "8月", "9月", "10月", "11月", "12月"];
+
+      var cells = days.map(function (day) {
+        var label = heatLabel(day);
+        return '<button type="button" class="heat-cell" data-level="' +
+          (day.future ? 0 : day.level) + '"' +
+          (day.today ? ' data-today="1"' : "") +
+          (day.future ? ' data-future="1"' : "") +
+          ' title="' + esc(label) + '" aria-label="' + esc(label) + '"></button>';
+      }).join("");
+
+      /*
+       * Month labels.
+       *
+       * Only up to the last month that actually begins inside the window — one slot
+       * per week would have been simpler, but a slot per week is 126 elements of
+       * which 5 carry text, and the empty ones pushed the real labels past the right
+       * edge of the card.
+       *
+       * Placement is as late as possible so a label never lies: 6月's first day can
+       * be several columns before the window starts, and a label pinned there would
+       * be outside the grid entirely. Pinning it to the first *visible* week is
+       * exact; pinning it to the week after never points at the wrong month. Columns
+       * later than today are skipped for the same reason — a label that appears in
+       * the future is a label the graph cannot back up.
+       */
+      var marks = [];
+      var takenWeek = {};
+      days.forEach(function (day, i) {
+        if (day.date.getDate() !== 1 || day.future) return;
+        var week = Math.floor(i / 7);
+        if (takenWeek[week]) return;
+        takenWeek[week] = true;
+        marks.push({ week: week, text: months[day.date.getMonth()] });
+      });
+
+      var labels = marks.map(function (mark) {
+        // 13px is the grid's own column stride (10px cell + 3px gap) in app.css.
+        // Writing it here is a coupling that a variable could not fix — the stride
+        // lives in the stylesheet and the labels are positioned from script — so it
+        // is one number in one place with a comment pointing at the other.
+        return '<span class="heat-month" style="left:' + mark.week * 13 + 'px">' +
+          esc(mark.text) + "</span>";
+      }).join("");
+
+      return '<div class="heat-scroll">' +
+        '<div class="heat-track">' +
+        '<div class="heat-months">' + labels + "</div>" +
+        '<div class="heat-body">' +
+        '<div class="heat-days">' +
+        ["一", "", "三", "", "五", "", "日"].map(function (d) {
+          return '<span class="heat-day">' + d + "</span>";
+        }).join("") +
+        "</div>" +
+        '<div class="heat-grid">' + cells + "</div>" +
+        "</div></div></div>";
+    }
+
+    function heatLabel(day) {
+      var text = (day.date.getMonth() + 1) + "月" + day.date.getDate() + "日";
+      if (day.future) return text + " · 还没到";
+      if (day.seconds <= 0) return text + " · 没有联机";
+      // The duration, not a count: the graph's colour is a duration bucket, so a
+      // tooltip that said "3 次" next to a dark square would describe a different
+      // quantity than the one being drawn.
+      return text + " · 联机 " + S.duration(day.seconds) +
+        (day.sessions > 1 ? "（" + day.sessions + " 次）" : "");
+    }
+
+    /* ------------------------------------------------------------- the loader */
+
+    /**
+     * Read the recorded days and draw the graph.
+     *
+     * Called once when the page renders and again on a slow timer while a room is
+     * open, so the today column fills in as the session runs. The rows come from the
+     * shell's own aggregation rather than from the raw file, which is what keeps the
+     * level buckets in one place.
+     */
+    function drawHeat() {
+      var box = el.querySelector("#heat-body");
+      if (!box) return null;
+
+      return S.apiJson("/api/sessions?days=126").then(function (result) {
+        var body = (result && result.body) || {};
+        var rows = {};
+        (body.rows || []).forEach(function (row) { rows[row.date] = row; });
+        withLiveTime(rows);
+
+        var days = heatData(rows, 18);
+        var stats = heatStats(days);
+        box.innerHTML = heatWeeks(days);
+
+        var total = el.querySelector("#heat-total");
+        if (total) {
+          total.innerHTML = stats.total > 0
+            ? "<b>" + S.duration(stats.seconds) + "</b> <span>累计联机</span>"
+            : "<b>还没有记录</b>";
+        }
+        var sub = el.querySelector("#heat-sub");
+        if (sub) {
+          sub.textContent = stats.total > 0
+            ? "最近 4 个月 · 联机 " + stats.total + " 天 · 当前连续 " + stats.streak + " 天"
+            : "开一次房间，这里就会开始记。";
+        }
+        return days;
+      }).catch(function () {
+        box.innerHTML = '<p class="heat-empty">没能读到联机记录，换个页面再回来试试。</p>';
+        return null;
+      });
+    }
+
+    /*
+     * ------------------------------------------------------------------ games
+     *
+     * The cards and the dots, from `GAMES` above. Both halves are drawn from the
+     * one list so the card on screen and the dot that claims to mark it cannot
+     * disagree about what exists.
+     */
+    function gameCarousel() {
+      var cards = GAMES.map(function (game, index) {
+        // The art is a CSS background, so the URL is escaped into the style
+        // attribute rather than into an `src`. `esc` is enough for a value this
+        // file controls, and the quotes are what it has to survive. It goes through
+        // `assetUrl` like every other asset: a bare `asset/…` resolves against whatever
+        // route the page happens to be on, which is only the same thing while every
+        // route is one segment deep.
+        return '<article class="game" data-index="' + index + '"' +
+          (index === 0 ? ' data-active="1"' : "") + ">" +
+          '<div class="game-media" style="background-image:url(&quot;' +
+          esc(S.assetUrl(game.art)) + '&quot;)" role="img" aria-label="' + esc(game.title) + '"></div>' +
+          '<div class="game-body">' +
+          '<span class="game-tag">' + esc(game.tag) + "</span>" +
+          '<h2 class="game-title">' + esc(game.title) + "</h2>" +
+          '<p class="game-note">' + esc(game.note) + "</p>" +
+          "</div>" +
+          "</article>";
+      }).join("");
+
+      var dots = GAMES.length > 1
+        ? '<div class="game-dots">' + GAMES.map(function (game, index) {
+          return '<button type="button" class="game-dot" data-index="' + index + '"' +
+            (index === 0 ? ' aria-current="true"' : "") +
+            ' aria-label="' + esc(game.title) + '"></button>';
+        }).join("") + "</div>"
+        : "";
+
+      return '<div class="games" id="games" data-count="' + GAMES.length + '">' +
+        cards + dots + "</div>";
+    }
+
+    function startCarousel(root) {
+      var box = root.querySelector("#games");
+      if (!box || GAMES.length < 2) return null;
+
+      var index = 0;
+      var cards = box.querySelectorAll(".game");
+      var dots = box.querySelectorAll(".game-dot");
+
+      function show(next) {
+        index = (next + cards.length) % cards.length;
+        for (var i = 0; i < cards.length; i++) {
+          if (i === index) cards[i].dataset.active = "1";
+          else delete cards[i].dataset.active;
+        }
+        for (var j = 0; j < dots.length; j++) {
+          if (j === index) dots[j].setAttribute("aria-current", "true");
+          else dots[j].removeAttribute("aria-current");
+        }
+      }
+
+      for (var i = 0; i < dots.length; i++) {
+        dots[i].addEventListener("click", function (event) {
+          show(Number(event.currentTarget.dataset.index));
+        });
+      }
+
+      var timer = window.setInterval(function () { show(index + 1); }, 6500);
+      return { destroy: function () { window.clearInterval(timer); } };
+    }
+
+    /*
+     * The page is the games board and nothing else, for now.
+     *
+     * 每日资讯, 服务 (联机隧道 / 云硬盘 / 云服务器) and 当前会话 used to fill the rest
+     * of this page. They are gone on purpose while 首页 is reworked: the daily feed
+     * is a frozen 2024 Mojang launcher batch that belongs with 资源查找 rather than
+     * above it, and the service cards duplicated what 联机 and 设置 already say. The
+     * blank half of the page is reserved for the daily content that replaces them.
+     *
+     * Their builders went with them — `renderNews`, `unavailableCard`, `tunnelCard`,
+     * `renderServices`, `renderSession` and the `S.apiJson("/api/daily-news")` read —
+     * rather than being left behind as dead code that would have to be read and ruled
+     * out every time this file is opened. `/api/daily-news` is still served:
+     * `site.rs` and its tests are untouched, so a page can ask for it again without
+     * anything on the Rust side changing.
+     *
+     * There is no `onTick` and no `onHealth` here any more either. Both existed only
+     * to rewrite the session card and the tunnel counters, and a page that returns
+     * neither is not given a tick at all — see `show()` in app.js.
+     *
+     * The two timers are cleared here and nowhere else, which is the whole reason this
+     * is one `return` instead of the `return carousel || NO_CAROUSEL` it was a moment
+     * ago: a `return` above this comment makes everything below it dead code, and the
+     * thing that was dead was the cleanup. The heat timer leaked a 30-second interval
+     * on every visit to 首页 — invisible, because a leaked timer that redraws an
+     * element that no longer exists does nothing except keep running.
+     */
+    return {
+      title: "首页",
+      destroy: function () {
+        if (carousel && carousel.destroy) carousel.destroy();
+        window.clearInterval(heatTimer);
+      },
     };
   }
 
@@ -442,632 +673,834 @@
     { id: "p2p-udp", kind: "p2p", label: "P2P · UDP", available: false, why: "TCP-over-UDP 打洞还没有实现" }
   ];
 
+  /*
+   * --------------------------------------------------------------- connect
+   *
+   * 联机 is one decision and one button.
+   *
+   * It used to be a form: 转发方式 (中转 / P2P), 协议 (TCP / UDP), 本机地址, a relay
+   * listbox and a tunnel card — and only the first option of each was ever selectable.
+   * Four controls that say "no" are not a choice, they are a reading assignment: the
+   * user has to work out which of them matter before they can reach the one button
+   * that does anything. It is now: pick a relay, accept the port, press 开启房间.
+   *
+   * The two controls that remain are the two the user can actually answer. The relay
+   * is a real choice — which node to share through. The port is not really a choice,
+   * it is a fact about where the game is listening, so it is *detected* and shown and
+   * the field exists to correct the detection rather than to demand an answer. An
+   * empty field is filled from `/api/ports/detect`; a field the user has touched is
+   * left alone for the life of the page.
+   *
+   * 转发方式 and 协议 did not stop existing — the kernel still only does relayed TCP.
+   * They went because stating them at the user as if they were decisions is worse than
+   * saying nothing: the honest version is that they are the same for everyone. When
+   * P2P or UDP ships, this page grows a control that does something.
+   *
+   * The relay list itself is `pickerRows()`, the same rows the old page built, so the
+   * button and the open list still cannot disagree about what exists.
+   */
+
+  /**
+   * How long 开启房间 keeps claiming the address might still arrive, in ms.
+   *
+   * It was 4500, chosen as "about as long as a relay handshake takes", and that was a
+   * guess that failed on the first real run: the kernel took roughly five seconds, so
+   * the dialog declared failure while the page behind it was already showing the
+   * address. The dialog now opens immediately and fills itself in, so this is only the
+   * point at which the *pending* wording stops being honest — and a user tired of
+   * waiting can close it at any time, which is what makes a generous number affordable.
+   */
+  var ROOM_ENDPOINT_WAIT_MS = 15000;
+  var ROOM_ENDPOINT_POLL_MS = 500;
+
+  /**
+   * A relay's three readings, as a word and a tone.
+   *
+   * The state comes from the shell's own probe (`/api/probe` → `probe_state`), which
+   * already separates "the control port answered" from "only ICMP did" — and that
+   * separation is the whole point, because a node you can ping but not tunnel through
+   * is not a usable node and calling it 「稳定」would be a lie the user pays for with a
+   * dead address they handed to a friend.
+   *
+   *   ok                       TCP 控制端口答了          → 延迟稳定   green
+   *   slow                     answered, but slowly      → 较稳定     amber
+   *   ping                     ping only, port closed    → 仅能 ping 通 amber
+   *   dead / none / no answer  nothing answered          → 断联       bright red
+   *
+   * The last four are the latency ladder, which is what `nodeState()` falls back to
+   * for a node the probe has not reported on yet — `low/mid/high` are milliseconds,
+   * not verdicts, so they map onto the same three readings rather than being shown
+   * raw. Every name here was read off `NODE_STATE` / `LATENCY_LABEL` in app.js
+   * rather than guessed: the first version of this function tested for `"icmp"`,
+   * which is a state this shell has never produced.
+   */
+  function relayReading(row) {
+    var state = row ? row.state : "unknown";
+    if (state === "ok") return { dot: "ok", label: "延迟稳定" };
+    if (state === "slow" || state === "mid") return { dot: "warn", label: "较稳定" };
+    if (state === "ping") return { dot: "warn", label: "仅能 ping 通" };
+    if (state === "low") return { dot: "ok", label: "延迟稳定" };
+    if (state === "high") return { dot: "warn", label: "较慢" };
+    if (state === "dead" || state === "none") return { dot: "down", label: "断联" };
+    return { dot: "busy", label: "测速中…" };
+  }
+
+  /* The page's mark is the program's own icon — the same `icon.png` the top bar uses,
+     so 联机 is branded like the client rather than like a concept.
+
+     It was an inline house SVG, drawn because a house says 房间 and because there is no
+     house glyph in the sprite. But the heading already says 红石远程联机, so a generic
+     house beside it was a second, weaker answer to a question the words had answered;
+     the product's own mark is the one image that means *this* app. Two icons with the
+     same brand in them is the point, not a duplication: the bar's is 30px and this one
+     is 56px, and they are read at different moments.
+
+     `assetUrl` rather than a bare path: the helper is the one place that knows how a
+     shell asset is addressed, and the same rule covers the runtime case where the page
+     is served from disk instead of from the binary. */
+  var ROOM_ICON = '<span class="room-hero-mark" role="img" aria-label="红石联机" ' +
+    'style="background-image:url(&quot;' + esc(S.assetUrl("icon.png")) + '&quot;)"></span>';
+
+  var COPY_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="9" y="9" width="11" height="11" rx="2"></rect>' +
+    '<path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"></path></svg>';
+
   function connectPage(el) {
-    var selectedMode = "relay-tcp";
-    var selectedNode = "auto";
-    var ticker = null;
+    var selected = "auto";
+    var manualPort = false;
+    var detected = null;
+    var timer = null;
+    var waiting = null;
+    var unsubscribe = null;
+    var unsubscribeNodes = null;
+    var unsubscribeKernel = null;
+    /* Whether *this* room ever reached the point of having an address. Read once, when its
+       dialog is dismissed; see `openRoomDialog`. */
+    var roomOpened = false;
 
     el.innerHTML =
-      pageHead("联机", "把本机的游戏端口，通过中转服务器交给朋友。玩家在游戏里填地址即可，不需要装任何东西。") +
-      '<div class="connect-grid">' +
-      '<div class="connect-form">' +
-      section("本机端口与转发方式", "link",
-        '<div class="field-row">' +
-        '<div class="field"><label class="label" for="game-port">本地游戏端口</label>' +
-        '<input class="input input--mono" id="game-port" type="number" inputmode="numeric" ' +
-        'min="1" max="65535" value="25565" autocomplete="off"></div>' +
-        '<div class="field"><label class="label" for="game-host">本机地址</label>' +
-        '<input class="input input--mono" id="game-host" type="text" value="127.0.0.1" autocomplete="off"></div>' +
-        "</div>" +
-        '<div class="mode-groups" style="margin-top:16px">' +
-        '<div class="mode-group"><span class="label">转发方式</span>' +
-        '<div class="segmented" id="mode-kind">' +
-        '<label data-kind="relay"><input type="radio" name="kind" value="relay" checked><span>中转</span></label>' +
-        '<label data-kind="p2p"><input type="radio" name="kind" value="p2p"><span>P2P</span></label>' +
-        "</div>" +
-        '<p class="mode-hint" id="kind-hint"></p></div>' +
-        '<div class="mode-group"><span class="label">协议</span>' +
-        '<div class="segmented" id="mode-proto"></div>' +
-        '<p class="mode-hint" id="proto-hint"></p></div>' +
-        "</div>") +
-      section("中转服务器", "globe",
-        '<div class="node-box" id="nodes"></div>' +
-        '<div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">' +
-        '<button type="button" class="btn btn--ghost" id="probe">' + icon("refresh", "icon--sm") + "重新测速</button>" +
-        '<button type="button" class="btn btn--ghost" id="reload-nodes">' + icon("globe", "icon--sm") + "刷新节点列表</button>" +
-        "</div>" +
-        '<p class="probe-note" id="probe-note"></p>',
-        "延迟由客户端直接连接节点的控制端口测得，反映的是「你的网络到节点」这一段。" +
-        "选「自动」时，会用探测到延迟最低的那个节点。") +
-      "</div>" +
-      '<div class="connect-side" id="connect-side"></div>' +
+      '<div class="room">' +
+      '<header class="room-hero">' +
+      '<span class="room-hero-icon">' + ROOM_ICON + "</span>" +
+      '<h1 class="room-hero-title">红石远程联机</h1>' +
+      "</header>" +
+      '<div id="room-body"></div>' +
       "</div>";
 
-    var portInput = el.querySelector("#game-port");
-    var hostInput = el.querySelector("#game-host");
-    var kindHint = el.querySelector("#kind-hint");
-    var protoHint = el.querySelector("#proto-hint");
-    var protoBox = el.querySelector("#mode-proto");
-    var nodesBox = el.querySelector("#nodes");
-    var probeNote = el.querySelector("#probe-note");
-    var side = el.querySelector("#connect-side");
+    var body = el.querySelector("#room-body");
 
-    S.loadSettings(false).then(function (loaded) {
-      if (loaded && loaded.default_game_port) portInput.value = String(loaded.default_game_port);
-    });
-
-    /* ---- mode picker: two levels, only relay+TCP is live today ---- */
-
-    function currentKind() {
-      var checked = el.querySelector('input[name="kind"]:checked');
-      return checked ? checked.value : "relay";
-    }
-
-    function renderProtocols() {
-      var kind = currentKind();
-      var forKind = MODES.filter(function (mode) { return mode.kind === kind; });
-      protoBox.innerHTML = forKind.map(function (mode) {
-        return '<label data-disabled="' + (mode.available ? "false" : "true") + '" title="' +
-          esc(mode.why || "") + '">' +
-          '<input type="radio" name="proto" value="' + mode.id + '"' +
-          (mode.id === selectedMode ? " checked" : "") +
-          (mode.available ? "" : " disabled") +
-          "><span>" + esc(mode.label.split(" · ")[1]) + "</span></label>";
-      }).join("");
-
-      kindHint.textContent = kind === "relay"
-        ? "经过中转服务器转发，兼容性最好，玩家侧零安装。"
-        : "尝试在两端之间直接建立连接，不经过中转，延迟更低。";
-
-      var mode = MODES.filter(function (m) { return m.id === selectedMode; })[0];
-      protoHint.textContent = mode && !mode.available
-        ? mode.why + "（当前只有「中转 · TCP」可用）"
-        : "TCP-over-UDP 走同一套隧道，播放器侧无感。";
-    }
-
-    /* Both listeners below are delegated on `el`, which is the *persistent* `.page`
-       element — the router only clears its children between navigations. A listener
-       put there outlives the page unless `destroy` takes it off again, and every
-       visit would add another one: one click on 开启隧道 would then fire one
-       `startTunnel()` per visit so far, and the second and later ones are refused
-       with "已经有一个隧道在运行了" by a tunnel the first one had just started. */
-    function onModeChange(event) {
-      if (event.target.name === "kind") {
-        // Switching kind selects that kind's first protocol; only relay+TCP exists.
-        var kind = currentKind();
-        selectedMode = kind === "relay" ? "relay-tcp" : "p2p-tcp";
-        renderProtocols();
-      } else if (event.target.name === "proto") {
-        selectedMode = event.target.value;
-        renderProtocols();
+    /*
+     * Two delegated listeners on the page element, not one per control.
+     *
+     * Both `render()` and every store publication replace the contents of `#room-body`,
+     * so listeners bound to the buttons inside it would have to be rebound on each
+     * pass. Delegation is bound once to the element the router owns.
+     *
+     * It also has to be *removed* on destroy, and that is a rule this project learned
+     * the hard way: the old 联机 page delegated on `el` and never took the listeners
+     * off, so returning to it stacked handlers and one click started the tunnel twice —
+     * a success and an error from one press, because the second call was refused with
+     * 已经有一个隧道在运行了. `verify.ps1` asserts the counts match.
+     */
+    function onPageClick(event) {
+      var target = event.target.closest ? event.target.closest("[data-act]") : null;
+      if (!target || !body.contains(target)) return;
+      var act = target.dataset.act;
+      if (act === "start") startRoom(target);
+      else if (act === "stop") stopRoom(target);
+      else if (act === "kernel") downloadKernel(target);
+      else if (act === "detect") detectPort(true);
+      else if (act === "copy") S.copyText((S.tunnel.tunnel || {}).endpoint || "", "连接地址");
+      else if (act === "relay") {
+        var list = body.querySelector("#room-relay-list");
+        if (list && list.hidden) openPicker();
+        else closePicker();
+      } else if (act === "choose") {
+        selected = target.dataset.value;
+        closePicker();
+        render();
       }
     }
 
-    el.addEventListener("change", onModeChange);
-    renderProtocols();
-
-    /* ---- node list ---- */
-
-    /*
-     * The relay picker: a button that opens a list of rows.
-     *
-     * It was a native `<select>` first, and the honest reason it is not one any more
-     * is that a `<select>` cannot be styled: on Windows the popup is drawn by the OS,
-     * so `border-radius`, `padding` and layout on an `<option>` are ignored and every
-     * row came out as one flat string with the name, the latency and the state run
-     * together — "南京 · 37 ms · 可建隧道". This is a listbox instead, and both halves
-     * of it are drawn from `pickerRows()`, so the button and the open list cannot
-     * disagree about what exists.
-     */
-    var store = S.nodes;
-    var pickerOpen = false;
-    var activeIndex = 0;
-    var triggerEl = null;
-    var listEl = null;
-
-    /** How a node's last measurement is described, in one key. */
-    function nodeState(node) {
-      return node.probe_state || (node.reachable === false ? "dead" : S.latencyState(node.latency_ms));
+    function onPageInput(event) {
+      if (event.target && event.target.id === "room-port") {
+        manualPort = true;
+        portHint();
+      }
     }
 
-    function stateLabel(state) {
-      return S.NODE_STATE[state] || S.LATENCY_LABEL[state] || "";
+    function onPageKeydown(event) {
+      if (event.target && event.target.id === "room-relay" &&
+          (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ")) {
+        event.preventDefault();
+        openPicker();
+      }
     }
 
-    /**
-     * Every choice, as data: the row the button shows and the rows the list shows.
-     *
-     * `自动选择` carries no hostname — its second line is the promise it makes — and a
-     * node carries its own plus whatever the probe said about why it is unusable.
-     */
-    function pickerRows() {
-      var best = store.best();
-      var rows = [{
-        value: "auto",
-        name: "自动选择",
-        host: "",
-        note: "挑延迟最低的可用节点",
-        ms: best ? best.latency_ms : null,
-        state: best ? nodeState(best) : "unknown"
-      }];
-      store.nodes.forEach(function (node) {
-        rows.push({
-          value: node.host,
-          name: node.region || node.host,
-          host: node.host,
-          note: node.probe_reason || "",
-          ms: node.latency_ms,
-          state: nodeState(node)
-        });
-      });
-      return rows;
-    }
+    el.addEventListener("click", onPageClick);
+    el.addEventListener("input", onPageInput);
+    el.addEventListener("keydown", onPageKeydown);
 
-    function rowByValue(value) {
+    /* ------------------------------------------------------------------ render */
+
+    function rowFor(value) {
       var rows = pickerRows();
       for (var i = 0; i < rows.length; i++) {
         if (rows[i].value === value) return rows[i];
       }
-      return null;
+      return rows[0];
     }
 
-    /** One row: the node on the left, its latency and meaning on the right. */
-    function rowHtml(row) {
-      return '<span class="picker-text">' +
-        '<span class="picker-name">' + esc(row.name) + "</span>" +
-        (row.host ? '<span class="picker-host">' + esc(row.host) + "</span>" : "") +
-        (row.note ? '<span class="picker-note">' + esc(row.note) + "</span>" : "") +
-        "</span>" +
-        '<span class="picker-meta"><span class="dot" data-latency="' + esc(row.state) + '"></span>' +
-        "<b>" + esc(S.latencyText(row.ms)) + "</b>" +
-        '<span class="picker-state">' + esc(stateLabel(row.state)) + "</span></span>";
+    function render() {
+      var tunnel = S.tunnel.tunnel;
+      body.innerHTML = tunnel ? roomRunning(tunnel) : roomIdle();
+      wire(tunnel);
     }
 
-    function renderTrigger() {
-      if (!triggerEl) return;
-      triggerEl.innerHTML = rowHtml(rowByValue(selectedNode) || pickerRows()[0]) +
-        '<span class="picker-caret" aria-hidden="true"></span>';
+    function roomIdle() {
+      var row = rowFor(selected);
+      var reading = relayReading(row);
+      var kernel = S.kernel.info;
+      var found = !!(kernel && kernel.found);
+
+      return '<div class="room-controls">' +
+        '<div class="room-field"><span class="room-label">中转服务器</span>' +
+        '<div class="room-select">' +
+        '<button type="button" class="input room-trigger" id="room-relay" data-act="relay" ' +
+        'aria-haspopup="listbox" aria-expanded="false" aria-label="选择中转服务器">' +
+        '<span class="picker-text"><span class="picker-name">' + esc(row.name) + "</span></span>" +
+        '<span class="room-reading" data-tone="' + reading.dot + '" id="room-relay-state">' +
+        '<span class="dot" data-latency="' + reading.dot + '"></span>' +
+        esc(reading.label) + "</span>" +
+        '<span class="room-caret" aria-hidden="true"></span>' +
+        "</button>" +
+        '<div class="picker-list room-list" id="room-relay-list" role="listbox" ' +
+        'aria-label="中转服务器" hidden></div>' +
+        "</div>" +
+        '<p class="room-hint" id="room-relay-hint"></p>' +
+        "</div>" +
+        '<div class="room-field"><label class="room-label" for="room-port">本地游戏端口</label>' +
+        '<div class="room-port-row">' +
+        '<input class="input input--mono" id="room-port" type="number" inputmode="numeric" ' +
+        'min="1" max="65535" autocomplete="off" placeholder="自动探测">' +
+        '<button type="button" class="btn btn--ghost room-redetect" id="room-redetect" ' +
+        'data-act="detect" title="重新探测本机游戏端口" aria-label="重新探测本机游戏端口">' +
+        icon("refresh", "icon--sm") + "</button>" +
+        "</div>" +
+        '<p class="room-hint" id="room-port-hint"></p>' +
+        // The port is the one field on this page that asks for a fact the user may not
+        // have. The guide explains it once; this link is how they find the explanation
+        // again on the second run, when the guide no longer appears.
+        '<a class="room-link" href="/help/port">什么是游戏端口？</a>' +
+        "</div>" +
+        "</div>" +
+        (found ? "" : '<div id="room-blocked"></div>') +
+        '<button type="button" class="btn btn--primary room-action" id="room-start" data-act="start"' +
+        (found ? "" : " disabled") + ">" + icon("play", "icon--sm") + "开启房间</button>";
     }
 
-    function renderList() {
-      if (!listEl) return;
-      var rows = pickerRows();
-      listEl.innerHTML = rows.map(function (row, index) {
-        return '<li class="picker-option" id="node-option-' + index + '" role="option" ' +
-          'data-value="' + esc(row.value) + '" data-index="' + index + '" ' +
-          'aria-selected="' + (row.value === selectedNode ? "true" : "false") + '">' +
-          '<span class="picker-mark">' + icon("check", "icon--sm") + "</span>" +
-          rowHtml(row) +
-          "</li>";
-      }).join("");
+    function roomRunning(tunnel) {
+      return '<div class="room-running">' +
+        '<p class="room-label">把下面这行发给朋友，他们在游戏里填这个地址就能进来</p>' +
+        '<div class="room-address">' +
+        '<div class="room-address-value' + (tunnel.endpoint ? "" : " is-empty") + '">' +
+        esc(tunnel.endpoint || "正在分配地址…") + "</div>" +
+        '<button type="button" class="btn btn--ghost room-copy" id="room-copy" data-act="copy"' +
+        (tunnel.endpoint ? "" : " disabled") + ">" + COPY_ICON + "复制地址</button>" +
+        "</div>" +
+        '<p class="room-hint" id="room-age"></p>' +
+        /*
+         * The two answers a host needs the moment the address exists: what to tell the
+         * friend, and what to do when the friend says it does not work. They live on 帮助
+         * rather than in the page because they are read once, by somebody who is stuck.
+         */
+        '<p class="room-links">' +
+        '<a class="room-link" href="/help/join">朋友怎么加入房间？</a>' +
+        '<a class="room-link" href="/help/trouble">常见问题：朋友连不上怎么办？</a>' +
+        "</p>" +
+        "</div>" +
+        '<button type="button" class="btn btn--danger room-action" id="room-stop" data-act="stop">' +
+        icon("close", "icon--sm") + "关闭房间</button>";
     }
 
-    /** The keyboard cursor, which is not the same thing as the chosen row. */
-    function applyActive() {
-      if (!listEl) return;
-      var options = listEl.querySelectorAll(".picker-option");
-      for (var i = 0; i < options.length; i++) {
-        if (i === activeIndex) options[i].setAttribute("data-active", "true");
-        else options[i].removeAttribute("data-active");
+    /*
+     * Everything that is not a click.
+     *
+     * The clicks are delegated (see `onPageClick`); what is left is the one thing that
+     * has to happen when the markup is *replaced* rather than when it is clicked — the
+     * detected port has to be put back into a field the re-render just recreated, and
+     * the kernel notice has to be drawn from whatever the kernel store knows now.
+     */
+    function wire(tunnel) {
+      if (tunnel) {
+        renderAge();
+        return;
       }
-      if (options[activeIndex]) {
-        triggerEl.setAttribute("aria-activedescendant", options[activeIndex].id);
-      }
+
+      var port = body.querySelector("#room-port");
+      if (port && detected && !manualPort) port.value = String(detected.port);
+
+      var blocked = body.querySelector("#room-blocked");
+      if (blocked) blocked.innerHTML = kernelNotice(S.kernel.info);
+
+      relayHint();
+      portHint();
     }
 
-    function onDocumentClick(event) {
-      // A click on the button or the list is this control's own business; anything
-      // else means the user has moved on.
-      if (event.target && event.target.closest && event.target.closest("#node-picker")) return;
-      closePicker();
-    }
+    /* ------------------------------------------------------------------ relay */
 
     function openPicker() {
-      if (pickerOpen || !listEl) return;
-      pickerOpen = true;
-      listEl.hidden = false;
-      triggerEl.setAttribute("aria-expanded", "true");
-      nodesBox.querySelector("#node-picker").setAttribute("data-open", "true");
+      var list = body.querySelector("#room-relay-list");
+      var trigger = body.querySelector("#room-relay");
+      if (!list || !trigger) return;
 
-      var rows = pickerRows();
-      activeIndex = 0;
-      for (var i = 0; i < rows.length; i++) {
-        if (rows[i].value === selectedNode) activeIndex = i;
-      }
-      applyActive();
+      list.innerHTML = pickerRows().map(function (row) {
+        var reading = relayReading(row);
+        return '<button type="button" class="picker-option" role="option" data-act="choose" ' +
+          'data-value="' + esc(row.value) + '" aria-selected="' +
+          (row.value === selected ? "true" : "false") + '">' +
+          '<span class="picker-text"><span class="picker-name">' + esc(row.name) + "</span>" +
+          (row.host
+            ? '<span class="picker-host">' + esc(row.host) + "</span>"
+            : '<span class="picker-note">' + esc(row.note) + "</span>") +
+          "</span>" +
+          '<span class="picker-meta"><b>' +
+          esc(typeof row.ms === "number" ? row.ms + " ms" : "—") + "</b>" +
+          '<span class="room-reading" data-tone="' + reading.dot + '">' +
+          '<span class="dot" data-latency="' + reading.dot + '"></span>' +
+          esc(reading.label) + "</span></span>" +
+          "</button>";
+      }).join("");
 
-      // `remove` first: re-opening (a probe can rebuild this control while it is
-      // open) must not leave a second listener behind on the document.
-      document.removeEventListener("click", onDocumentClick);
-      document.addEventListener("click", onDocumentClick);
+      list.hidden = false;
+      trigger.setAttribute("aria-expanded", "true");
     }
 
     function closePicker() {
-      document.removeEventListener("click", onDocumentClick);
-      if (!pickerOpen) return;
-      pickerOpen = false;
-      if (listEl) listEl.hidden = true;
-      if (triggerEl) {
-        triggerEl.setAttribute("aria-expanded", "false");
-        triggerEl.removeAttribute("aria-activedescendant");
-      }
-      var picker = nodesBox.querySelector("#node-picker");
-      if (picker) picker.removeAttribute("data-open");
+      var list = body.querySelector("#room-relay-list");
+      var trigger = body.querySelector("#room-relay");
+      if (list) list.hidden = true;
+      if (trigger) trigger.setAttribute("aria-expanded", "false");
     }
 
-    function choose(value) {
-      if (rowByValue(value)) selectedNode = value;
-      closePicker();
-      renderNodes();
-      // `renderNodes` rebuilt the trigger, so focus the one that is on screen now.
-      if (triggerEl) triggerEl.focus();
-    }
-
-    function moveActive(step) {
-      var count = pickerRows().length;
-      activeIndex = (activeIndex + step + count) % count;
-      applyActive();
-    }
-
-    function onTriggerKey(event) {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        if (!pickerOpen) openPicker();
-        else moveActive(event.key === "ArrowDown" ? 1 : -1);
+    function relayHint() {
+      var hint = body.querySelector("#room-relay-hint");
+      if (!hint) return;
+      var row = rowFor(selected);
+      if (!row) {
+        hint.textContent = "正在读取节点列表…";
         return;
       }
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        if (!pickerOpen) openPicker();
-        else {
-          var row = pickerRows()[activeIndex];
-          if (row) choose(row.value);
+      if (row.value === "auto") {
+        hint.textContent = "自动选择：开房间时用测速最快、并且能建隧道的那个节点。";
+        return;
+      }
+      var reading = relayReading(row);
+      hint.textContent = reading.dot === "down"
+        ? "这个节点现在建不了隧道，换一个再开。"
+        : "房间会通过这个节点中转。";
+    }
+
+    /* ------------------------------------------------------------------- port */
+
+    /**
+     * What to say under the port field.
+     *
+     * The three sources are three different claims and the words have to match, because
+     * the user is about to hand this number to somebody else:
+     *
+     *   default   a listening port in 25565–25569 held by a Java process — this is the game
+     *   java      a listening port held by a Java process, somewhere else — this is the game
+     *   fallback  nothing was found — this is the default, and it is a guess
+     *
+     * A single "已探测到" for all three would be a lie in the third case, which is the case
+     * where the user most needs to know.
+     */
+    function portHint() {
+      var hint = body.querySelector("#room-port-hint");
+      if (!hint) return;
+      if (manualPort) {
+        hint.textContent = "手动填写的端口。";
+        return;
+      }
+      if (!detected) {
+        hint.textContent = "正在探测本机游戏端口…";
+        return;
+      }
+      if (detected.source === "fallback") {
+        hint.textContent = "没找到正在运行的游戏，先按默认端口 " + detected.port + " 走；" +
+          "开着游戏再点右边的刷新按钮。";
+        return;
+      }
+      var where = detected.source === "default" ? "默认端口" : "非默认端口";
+      hint.textContent = "已探测到本机游戏在 " + detected.port + " 端口（" + where + "）。";
+    }
+
+    /**
+     * Ask the shell where the game is, and put the answer in the field.
+     *
+     * `forced` is the 重新探测 button. The difference matters and is the whole reason the
+     * parameter exists: the first call must not overwrite a port the user typed, while the
+     * button is the user *asking* for it to be overwritten — pressing it after starting a
+     * game is the exact flow it is there for.
+     */
+    function detectPort(forced) {
+      if (manualPort && !forced) return;
+      if (forced) {
+        manualPort = false;
+        var hint = body.querySelector("#room-port-hint");
+        if (hint) hint.textContent = "正在探测本机游戏端口…";
+      }
+
+      S.apiJson("/api/ports/detect").then(function (result) {
+        var found = (result && result.body) || null;
+        if (!found || typeof found.port !== "number") {
+          portHint();
+          return;
         }
-        return;
-      }
-      if (event.key === "Escape" && pickerOpen) {
-        event.preventDefault();
-        closePicker();
-      }
-    }
-
-    /** Draw whatever the store currently holds, including why it is empty. */
-    function renderNodes() {
-      var wasOpen = pickerOpen;
-
-      if (!store.nodes.length) {
-        triggerEl = null;
-        listEl = null;
-        if (store.state === "loading" || store.state === "idle") {
-          nodesBox.innerHTML = '<div class="empty">正在读取节点列表…</div>';
-        } else if (store.state === "missing") {
-          nodesBox.innerHTML = emptyBox("官方节点接口还没有上线。可以在设置页检查服务地址与代理。");
-        } else {
-          nodesBox.innerHTML = emptyBox(
-            "取不到节点列表：" + (store.reason || "原因未知") + "。可以在设置页检查服务地址与代理。");
-        }
-        probeNote.textContent = "";
-        renderTunnel();
-        return;
-      }
-
-      nodesBox.innerHTML =
-        '<div class="picker" id="node-picker">' +
-        '<button type="button" class="picker-trigger" id="node-trigger" role="combobox" ' +
-        'aria-haspopup="listbox" aria-expanded="false" aria-controls="node-list" ' +
-        'aria-label="中转服务器"></button>' +
-        '<ul class="picker-list" id="node-list" role="listbox" aria-label="中转服务器" hidden></ul>' +
-        "</div>";
-
-      triggerEl = nodesBox.querySelector("#node-trigger");
-      listEl = nodesBox.querySelector("#node-list");
-
-      // A selection pointing at a node that is no longer listed falls back rather
-      // than leaving the button blank — a refresh can drop a machine.
-      if (!rowByValue(selectedNode)) selectedNode = "auto";
-      renderTrigger();
-      renderList();
-
-      triggerEl.addEventListener("click", function () {
-        if (pickerOpen) closePicker();
-        else openPicker();
-      });
-      triggerEl.addEventListener("keydown", onTriggerKey);
-      listEl.addEventListener("click", function (event) {
-        var option = event.target.closest ? event.target.closest(".picker-option") : null;
-        if (option) choose(option.dataset.value);
-      });
-
-      if (wasOpen) openPicker();
-
-      var best = store.best();
-      if (best && store.probedAt) {
-        probeNote.textContent = "最近一次测速：" + S.relativeTime((Date.now() - store.probedAt) / 1000) +
-          "，最快可用节点是 " + (best.region || best.host) + "（" + Math.round(best.latency_ms) + " ms）。" +
-          " 这一份结果在客户端打开时读取一次，切换页面不会重新测速。";
-      } else {
-        probeNote.textContent = "";
-      }
-      renderTunnel();
-    }
-
-    // Redrawn from the store whenever it changes — a refresh or a probe started
-    // anywhere, including one still running from startup.
-    var unsubscribeNodes = store.subscribe(function () { renderNodes(); });
-
-    el.querySelector("#probe").addEventListener("click", function () {
-      store.probe(true).then(function () {
-        var best = store.best();
-        if (!best) return;
-        S.termWrite("最快可用节点：" + (best.region || best.host) + "（" + best.host + "） " +
-          Math.round(best.latency_ms) + " ms", "ok");
-        // Say which nodes answered a ping but have no tunnel port: that is the
-        // difference between "your network is broken" and "that node is not accepting
-        // tunnels", and the user can act on only one of them.
-        var blocked = store.nodes.filter(function (node) { return node.probe_state === "ping"; });
-        if (blocked.length) {
-          S.termWrite("有 " + blocked.length + " 个节点能 ping 通但控制端口没开，无法建隧道：" +
-            blocked.map(function (n) { return n.region; }).join("、"), "warn");
-        }
-      });
-    });
-
-    el.querySelector("#reload-nodes").addEventListener("click", function () {
-      S.termWrite("重新读取节点列表", "dim");
-      store.load(true).then(function (nodes) {
-        if (nodes.length) store.probe(false);
-      });
-    });
-
-    /* ---- tunnel ---- */
-
-    function chosenNode() {
-      if (selectedNode === "auto") return store.best();
-      return store.nodes.filter(function (n) { return n.host === selectedNode; })[0] || null;
-    }
-
-    function renderTunnel() {
-      if (!side) return;
-      var tunnel = S.tunnel.tunnel;
-      var createdAt = S.tunnel.createdAt;
-      var kernel = S.kernel.info;
-
-      if (!tunnel) {
-        var node = chosenNode();
-        // The button's state follows the kernel, not the settings: a client with no
-        // kernel cannot start a tunnel however correct the form is, and the way out
-        // of that is the download, not a disabled button with no explanation.
-        var found = !!(kernel && kernel.found);
-        var exited = kernel && kernel.state === "exited" && kernel.exit_meaning;
-
-        side.innerHTML =
-          '<div class="card">' +
-          '<div class="card-head"><h3>隧道</h3>' +
-          pill(null, exited ? "down" : "idle", exited ? "已结束" : "未开启") +
-          "</div>" +
-          (exited
-            ? '<p class="usage-note" style="margin-top:12px">' + esc(kernel.exit_meaning) +
-              (kernel.exit_code === null || kernel.exit_code === undefined
-                ? "" : "（退出代码 " + esc(String(kernel.exit_code)) + "）") + "</p>"
-            : '<p class="usage-note" style="margin-top:12px">' +
-              "开启后会在这里显示连接地址与创建时间，右侧同时打开日志。</p>") +
-          '<dl class="kv" style="margin-top:12px">' +
-          "<dt>转发方式</dt><dd>" + esc(modeLabel(selectedMode)) + "</dd>" +
-          "<dt>本机端口</dt><dd>" + esc(portInput.value || "—") + "</dd>" +
-          "<dt>目标节点</dt><dd>" +
-          esc(selectedNode === "auto"
-            ? (node ? node.host + "（自动）" : "自动（暂无可用节点）")
-            : selectedNode) + "</dd>" +
-          (found ? "" : "<dt>内核</dt><dd>" + esc(kernelExpected()) + "</dd>") +
-          "</dl>" +
-          '<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">' +
-          '<button type="button" class="btn btn--primary" id="tunnel-start"' +
-          (found ? "" : " disabled") + ">" +
-          icon("play", "icon--sm") + "开启隧道</button>" +
-          (found ? "" :
-            '<button type="button" class="btn btn--ghost" id="kernel-download">' +
-            icon("download", "icon--sm") + "下载内核</button>") +
-          "</div>" +
-          (found ? "" : kernelNotice(kernel)) +
-          "</div>";
-        return;
-      }
-
-      var elapsed = createdAt ? Math.floor((Date.now() - createdAt) / 1000) : 0;
-      side.innerHTML =
-        '<div class="card">' +
-        '<div class="card-head"><h3>隧道</h3>' +
-        '<span class="pill" data-state="ok"><span class="pill-dot"></span>运行中</span></div>' +
-        '<div style="margin-top:14px">' +
-        '<div class="addr" data-assigned="' + (tunnel.endpoint ? "true" : "false") + '">' +
-        "<span>" + esc(tunnel.endpoint || "还没有分配地址") + "</span>" +
-        (tunnel.endpoint
-          ? '<button type="button" class="addr-copy" id="copy-addr" title="复制地址" aria-label="复制地址">' +
-            icon("copy", "icon--sm") + "</button>"
-          : "") +
-        "</div></div>" +
-        '<dl class="tunnel-grid" style="margin-top:14px">' +
-        cell("创建于", createdAt ? S.relativeTime(elapsed) : "—") +
-        cell("已运行", S.duration(elapsed)) +
-        cell("转发方式", modeLabel(selectedMode)) +
-        cell("本机端口", String(portInput.value || "—")) +
-        cell("节点", tunnel.node || "—") +
-        cell("隧道号", tunnel.uuid || "—") +
-        "</dl>" +
-        '<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">' +
-        '<button type="button" class="btn btn--danger" id="tunnel-stop">' +
-        icon("close", "icon--sm") + "关闭隧道</button>" +
-        '<button type="button" class="btn btn--ghost" id="tunnel-log">' +
-        icon("info", "icon--sm") + "查看日志</button>" +
-        "</div></div>";
-
-      var copy = side.querySelector("#copy-addr");
-      if (copy) {
-        copy.addEventListener("click", function () { S.copyText(tunnel.endpoint, "连接地址"); });
-      }
-      side.querySelector("#tunnel-stop").addEventListener("click", stopTunnel);
-      side.querySelector("#tunnel-log").addEventListener("click", function () {
-        S.drawerOpen(true);
+        detected = found;
+        if (manualPort) return;
+        var port = body.querySelector("#room-port");
+        if (port) port.value = String(found.port);
+        portHint();
+      }).catch(function () {
+        portHint();
       });
     }
 
-    function cell(term, value) {
-      return '<div class="tunnel-cell"><dt>' + esc(term) + "</dt><dd>" +
-        "<code>" + esc(value) + "</code></dd></div>";
-    }
+    /* ------------------------------------------------------------------ start */
 
-    /** The file name this build would download, e.g. `hongshic-windows-amd64.exe`. */
-    function kernelExpected() {
-      var kernel = S.kernel.info;
-      return (kernel && kernel.expected_file) || "hongshic";
-    }
-
-    /** What to do about a missing kernel: the path, and the button above. */
-    function kernelNotice(kernel) {
-      var dir = (kernel && kernel.core_dir) || "core";
-      var platform = kernel && kernel.platform ? kernel.platform + "-" + kernel.arch : "当前平台";
-      return notice("warn",
-        "<strong>没有找到内核 <code>" + esc(kernelExpected()) + "</code>。</strong>" +
-        "隧道由 <code>hongshic</code> 承担，客户端只负责把它跑起来。<br>" +
-        "点上面的「下载内核」会自动取匹配当前平台的版本（<code>" + esc(platform) + "</code>），" +
-        "下载好之后就能直接开隧道。<br>" +
-        "也可以自己把内核放进客户端旁边的 <code>core</code> 目录（也就是 <code>" +
-        esc(dir) + "</code>），然后重开客户端。");
-    }
-
-    function modeLabel(id) {
-      var mode = MODES.filter(function (m) { return m.id === id; })[0];
-      return mode ? mode.label : id;
-    }
-
-    function startTunnel() {
-      var port = parseInt(portInput.value, 10);
+    function startRoom(button) {
+      var portField = body.querySelector("#room-port");
+      var port = portField && portField.value ? parseInt(portField.value, 10) : 0;
       if (!(port > 0 && port < 65536)) {
-        S.toast("本地端口要填 1 到 65535 之间的数字", "warn");
-        portInput.focus();
+        S.toast("本地游戏端口要填 1 到 65535 之间的数字", "warn");
+        if (portField) portField.focus();
         return;
       }
-      var node = chosenNode();
-      if (selectedNode !== "auto" && !node) {
-        S.toast("选中的节点不在列表里，请重新选择", "warn");
-        return;
+
+      /*
+       * The relay has to be resolved here, and getting this wrong is not subtle.
+       *
+       * `selected` is a *choice* — the string `"auto"` is this page's own word for
+       * "whichever is fastest" — and the kernel takes a hostname. The first version of
+       * this function passed `selected` straight through, so 自动选择 sent `-t auto` and
+       * the kernel answered `不知道这样的主机`, exited 1, and the room never came up. The
+       * dialog said 房间没开起来 and was right, but the default path was broken, which is
+       * the worst place for a bug to live.
+       *
+       * `store.best()` is the same resolution the old page used: lowest measured
+       * latency among the nodes a tunnel can actually be built on, not merely the
+       * lowest.
+       */
+      var node = selected === "auto" ? store.best() : null;
+      if (!node) {
+        node = store.nodes.filter(function (entry) { return entry.host === selected; })[0] || null;
       }
       if (!node) {
-        S.toast("还没有可用的中转节点，先刷新一下节点列表", "warn");
+        S.toast(selected === "auto"
+          ? "还没有可用的中转节点，先刷新一下节点列表"
+          : "选中的节点不在列表里了，重新选一个", "warn");
+        return;
+      }
+      if (selected !== "auto" && relayReading({ state: nodeState(node) }).dot === "down") {
+        S.toast("这个节点现在连不上，换一个节点再开房间", "warn");
         return;
       }
 
-      S.drawerOpen(true);
-      S.termWrite("准备开启隧道", "ident");
-      S.termWrite("转发方式 " + modeLabel(selectedMode) + " · 本机 " +
-        hostInput.value + ":" + port + " · 节点 " + node.host, "dim");
+      var button = body.querySelector("#room-start");
+      if (button) {
+        button.disabled = true;
+        button.textContent = "正在开启…";
+      }
 
-      S.apiSend("/api/tunnel/start", {
-        mode: selectedMode,
-        relay: node.host,
-        game_host: hostInput.value,
-        game_port: port
-      }).then(function (result) {
-        var body = result.body || {};
+      /*
+       * Do **not** put `data.tunnel` into the store here.
+       *
+       * A start request answers as soon as the process is spawned, and the tunnel it
+       * carries has `endpoint: null` and `uuid: null` — the address arrives later on
+       * the kernel's stdout. `S.tunnel.followKernel` is what promotes those fields, and
+       * it skips the write when endpoint/uuid/node are unchanged, so seeding the store
+       * with the empty version made every later poll a no-op: the store sat on
+       * `endpoint: null` forever while `/api/tunnel/status` reported the real address,
+       * the page said 正在分配地址…, and `awaitRoom` timed out and announced a failure
+       * for a tunnel that was up.
+       *
+       * Nothing has to be set: `S.tunnel` is refreshed on the boot interval and
+       * `followKernel` publishes as soon as the kernel reports an endpoint, which is
+       * what re-renders this page into its running state.
+       */
+      /*
+       * Start the kernel poll, and this is the line that makes the running state work
+       * at all.
+       *
+       * `kernelStore.watch` is armed in exactly two places: `drawerOpen(true)`, and
+       * `boot()` when the kernel was *already* running at startup. The old page opened
+       * the log drawer on start, so it got the poll as a side effect. This page
+       * deliberately does not open the drawer — the address is handed over in a dialog
+       * instead — and removing that call silently removed the only thing that ever told
+       * the client a kernel had come up. The symptom was a tunnel that the server
+       * reported correctly (`/api/tunnel/status` had the endpoint) while the page said
+       * 正在分配地址… forever with `S.kernel.info.state === "stopped"`.
+       *
+       * `watch(true)` is a fact about the world, not about the panel: a kernel is
+       * running, so the client polls for it. A poll that finds nothing only re-arms at
+       * the idle rate — see `rearm` — so this stays cheap.
+       */
+      S.kernel.watch(true);
 
-        // The kernel is a child process: starting it succeeds long before it has a
-        // tunnel. The endpoint arrives on its stdout a moment later and the poll in
-        // `S.kernel` is what lifts it into the card, so "started" is all that is
-        // claimed here.
-        if (result.ok && body.state === "ok") {
-          S.termWrite("内核已启动，等待分配隧道地址…", "ok");
-          S.kernel.watch(true);
-          S.kernel.drain();
+      // This room has not produced an address yet. Reset per attempt: a second room in the
+      // same visit must earn its own dismissal.
+      roomOpened = false;
+
+      S.apiSend("/api/tunnel/start", { relay: node.host, game_port: port }).then(function (result) {
+        var data = (result && result.body) || {};
+        if (!result.ok || data.state !== "ok") {
+          // The shell refuses in words on purpose — 已经有一个隧道在运行 / 没有找到内核 /
+          // 没有选择中转服务器 — and those words are worth more than a generic failure.
+          S.toast(data.reason || "开启失败，换个节点再试一次", "warn");
+          if (button) {
+            button.disabled = false;
+            button.innerHTML = icon("play", "icon--sm") + "开启房间";
+          }
           return;
         }
-
-        S.termWrite(body.reason || "隧道没能开启", "warn");
-        S.toast(body.reason || "隧道没能开启", "warn", 6000);
-        if (body.kernel) S.kernel.refresh();
+        awaitRoom(data.tunnel);
       }).catch(function (err) {
-        S.termWrite("请求失败：" + String(err), "error");
-        S.toast("请求失败：" + String(err), "warn");
+        S.toast("客户端没有响应：" + String(err), "warn");
+        if (button) {
+          button.disabled = false;
+          button.innerHTML = icon("play", "icon--sm") + "开启房间";
+        }
       });
     }
 
+    /*
+     * Wait for the endpoint, then say it out loud.
+     *
+     * A start request answers as soon as the process is spawned; the address arrives
+     * later on the kernel's stdout and the shell reads it from there. So there is a
+     * second or two where a room exists and has no address, and the page has to hold
+     * the user through it rather than opening a dialog with a blank line in it.
+     *
+     * The dialog is the point of the whole flow: the address is what the user came
+     * for, and making them hunt for it in a log panel was the old behaviour. If the
+     * endpoint never arrives the dialog opens anyway and says so, because "it did not
+     * come up" is the one thing a user must not have to infer from silence.
+     */
+    function awaitRoom(seed) {
+      var deadline = Date.now() + ROOM_ENDPOINT_WAIT_MS;
+      window.clearTimeout(waiting);
+
+      /*
+       * The dialog opens *first*, as pending, and the address is filled into it when it
+       * arrives.
+       *
+       * The first version waited for the endpoint and only then opened, with a 4.5s cap
+       * after which it announced failure. That is a false negative waiting to happen:
+       * it did happen, on a run where the kernel took about five seconds to reach the
+       * relay — the dialog said 房间没开起来 while the page behind it was already
+       * showing `nj.hongshi.site:49048`. A fixed wait cannot tell "not yet" from "not
+       * ever", so it should not try: open immediately, say 正在连接, and update in
+       * place. The deadline now only decides when to stop claiming it might still work.
+       */
+      var panel = openRoomDialog();
+      var startedAt = Date.now();
+      /*
+       * Latched, and latching is the whole fix.
+       *
+       * Three versions of this condition reported failure over a room that was coming
+       * up, and all three shared one mistake: they treated *not having observed* a
+       * running kernel as evidence that there was none.
+       *
+       *   1. `!current` — the tunnel store is empty for the first second after any start.
+       *   2. `S.kernel.info && !S.kernel.info.running` — that snapshot is the *previous*
+       *      kernel for a moment, so a room opened just after closing one died at once.
+       *   3. the same check behind a 2.5s grace window — still wrong, because the store
+       *      can go longer than that without reporting anything at all: it publishes only
+       *      when the state *changes*, and the last thing it heard was "stopped".
+       *
+       * So the fact being waited for is positive: "this client has seen the kernel of
+       * this room running". Only once that is true does its absence mean anything, and
+       * then it means the kernel died — which is worth reporting immediately instead of
+       * holding the user until the deadline.
+       *
+       * The last resort is the deadline, and it says nothing about the kernel because by
+       * then the client genuinely does not know: the room may still be connecting.
+       */
+      var sawRunning = false;
+
+      function look() {
+        var current = S.tunnel.tunnel;
+        if (current && current.endpoint) {
+          fillRoomDialog(panel, current.endpoint, seed);
+          return;
+        }
+
+        var kernel = S.kernel.info;
+        if (kernel && kernel.running) sawRunning = true;
+        if (sawRunning && (!kernel || !kernel.running)) {
+          markRoomDialogFailed(panel, "内核起来之后又退出了。");
+          return;
+        }
+        if (Date.now() >= deadline) {
+          markRoomDialogFailed(panel, "过了这么久还没拿到地址。");
+          return;
+        }
+        waiting = window.setTimeout(look, ROOM_ENDPOINT_POLL_MS);
+      }
+      look();
+    }
+
+    /*
+     * The room dialog, on the shell's shared dialog (`S.openDialog`).
+     *
+     * It keeps only what is specific to a room: the address box, its three states and the
+     * copy button. The overlay, the panel, the backdrop click and Escape used to be
+     * written here too, and they are now the same code the version notice and the
+     * first-run guide use — three copies of an overlay is how a client ends up with
+     * three of everything.
+     */
+    function openRoomDialog() {
+      return S.openDialog(
+        '<h2 class="dlg-title" id="room-dialog-title">房间正在连接</h2>' +
+        "<p>客户端已经在启动中转连接，地址一出来就显示在下面。</p>" +
+        '<div class="dlg-addr is-pending" id="room-dialog-addr">正在分配地址…</div>' +
+        '<p class="dlg-note" id="room-dialog-note">' +
+        "这一般要几秒。地址出现之前，先别把空地址发给朋友。</p>" +
+        S.dialogActions(
+          '<button type="button" class="btn btn--ghost" data-dialog-close>知道了</button>'
+        ),
+        null,
+        false,
+        /*
+         * Dismissed — by 知道了, by Escape, or by a click on the backdrop.
+         *
+         * `roomOpened` is the gate on what happens next: the tenth-launch thank-you is
+         * only owed to somebody who actually played, and a room that never came up is a
+         * failed attempt rather than a session. So the address arriving is what arms it,
+         * and this callback is what fires it.
+         */
+        function () {
+          if (roomOpened) S.announceSupport();
+        }
+      );
+    }
+
+    /** The address arrived: fill it in, and give the user the button that uses it. */
+    function fillRoomDialog(panel, endpoint, seed) {
+      if (!panel || !panel.isConnected) return;
+      // The room is real: this is what makes the dismissal worth acknowledging. See the
+      // `onClose` callback in `openRoomDialog`.
+      roomOpened = true;
+      var tunnel = S.tunnel.tunnel || {};
+      var host = (seed && seed.node) || tunnel.node || "自动选择";
+
+      panel.querySelector("#room-dialog-title").textContent = "房间开好了";
+      var body = panel.querySelector("p");
+      if (body) {
+        body.textContent = "把下面这行发给朋友，他们在游戏里「多人游戏 → 直接连接」填进去就能进。";
+      }
+      var address = panel.querySelector("#room-dialog-addr");
+      address.classList.remove("is-pending");
+      address.textContent = endpoint;
+
+      var note = panel.querySelector("#room-dialog-note");
+      if (note) {
+        note.textContent = "通过 " + host +
+          (tunnel.game_port ? " · 本地端口 " + tunnel.game_port : "") +
+          " · 房间开着就一直有效";
+      }
+
+      var actions = panel.querySelector(".dlg-actions");
+      var copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "btn btn--primary";
+      copy.id = "room-dialog-copy";
+      copy.innerHTML = COPY_ICON + "复制地址";
+      copy.addEventListener("click", function () {
+        S.copyText(endpoint, "连接地址");
+        copy.textContent = "已复制";
+        copy.disabled = true;
+      });
+      actions.insertBefore(copy, actions.firstChild);
+    }
+
+    /** The wait ran out, or the room died. Say so in the dialog the user is holding. */
+    function markRoomDialogFailed(panel, reason) {
+      if (!panel || !panel.isConnected) return;
+      panel.querySelector("#room-dialog-title").textContent = "房间没开起来";
+      var body = panel.querySelector("p");
+      if (body) {
+        body.textContent = reason + "可能是没能连上中转服务器，或者网络断了。";
+      }
+      var address = panel.querySelector("#room-dialog-addr");
+      address.textContent = "没有地址";
+      address.classList.remove("is-pending");
+      address.classList.add("is-failed");
+      var note = panel.querySelector("#room-dialog-note");
+      if (note) note.textContent = "换个节点再开一次试试。";
+    }
+
+    /* ------------------------------------------------------------------- stop */
+
+    /**
+     * Fetch the kernel from the official site and install it beside the client.
+     *
+     * No log panel and no terminal output: an install is one action with one outcome,
+     * and the button plus a toast is the whole story. What matters is the *end state* —
+     * `/api/kernel/download` reports the path it wrote, and `S.kernel.refresh()` is what
+     * makes the notice disappear and 开启房间 come alive, because the kernel store is the
+     * one place that decides whether a kernel exists.
+     */
     function downloadKernel(button) {
-      var label = button.textContent;
+      var label = button.innerHTML;
       button.disabled = true;
       button.textContent = "正在下载…";
-      S.drawerOpen(true);
-      S.termWrite("正在从官方站点下载内核（" + kernelExpected() + "）…", "ident");
 
       S.kernel.download().then(function (result) {
-        var body = result.body || {};
-        if (result.ok) {
-          S.termWrite("内核已安装：" + (body.path || "") + "（" +
-            Math.round((body.bytes || 0) / 1024) + " KB）", "ok");
-          S.toast("内核已就绪，可以开启隧道了");
+        var body = (result && result.body) || {};
+        if (!result.ok) {
+          S.toast("下载内核失败：" + (body.reason || "原因未知"), "warn", 8000);
           return;
         }
-        S.termWrite("下载内核失败：" + (body.reason || "原因未知"), "warn");
-        S.toast("下载内核失败：" + (body.reason || "原因未知"), "warn", 8000);
+        S.toast("内核已装好（" + Math.round((body.bytes || 0) / 1024) + " KB），可以开房间了", null, 6000);
+        return S.kernel.refresh();
       }).catch(function (err) {
-        S.termWrite("下载内核失败：" + String(err), "error");
         S.toast("下载内核失败：" + String(err), "warn", 8000);
       }).then(function () {
+        // The button may be gone by now — a successful download re-renders this page —
+        // so it is checked rather than assumed.
         if (button.isConnected) {
           button.disabled = false;
-          button.textContent = label;
+          button.innerHTML = label;
         }
       });
     }
 
-    function stopTunnel() {
-      S.termWrite("正在关闭隧道…", "dim");
-      S.tunnel.stop();
+    function stopRoom(button) {
+      if (button) {
+        button.disabled = true;
+        button.textContent = "正在关闭…";
+      }
+      // No log panel here either. Closing a room is not a thing to go and read about;
+      // it either happened or the toast says why it did not.
+      S.tunnel.stop().then(function () {
+        S.toast("房间已关闭，记录已存好", null);
+      }).catch(function (err) {
+        S.toast("关闭失败：" + String(err), "warn");
+      });
     }
 
-    function onPageClick(event) {
-      if (!event.target.closest) return;
-      if (event.target.closest("#tunnel-start")) startTunnel();
-      var download = event.target.closest("#kernel-download");
-      if (download) downloadKernel(download);
+    /* ----------------------------------------------------------------- wiring */
+
+    function renderAge() {
+      var hint = body.querySelector("#room-age");
+      if (!hint) return;
+      var age = S.tunnel.age();
+      var tunnel = S.tunnel.tunnel || {};
+      hint.textContent = "房间已开启 " + (age === null ? "—" : S.duration(age)) +
+        (tunnel.node ? " · 通过 " + tunnel.node : "");
     }
 
-    el.addEventListener("click", onPageClick);
+    /*
+     * Two subscriptions, because two things this page shows arrive on their own time.
+     *
+     * The relay's stability reading comes from the node store, which is read once at
+     * startup and re-probed when the user asks — so the page has to *ask* for it
+     * (`load(false)` answers from cache when `boot()` already read it) and then redraw
+     * when the measurement lands. Without the subscribe the indicator sat on
+     * 「测速中…」for the life of the page: the store had the numbers, this page just
+     * never heard about them.
+     *
+     * The other is the tunnel, which changes when the kernel says so.
+     */
+    unsubscribe = S.tunnel.subscribe(function () {
+      // Re-rendering across the idle/running boundary throws the open list away, so a
+      // poll landing while it is open closes it. Same trade the old picker made, and
+      // the right one: a list that reshuffles under the cursor is worse than one that
+      // closes.
+      render();
+    });
+    unsubscribeNodes = store.subscribe(function () {
+      // Only the reading and the hint change, so the trigger and the port field are
+      // updated in place: a full re-render here would wipe a half-typed port, and the
+      // port has nothing to do with which relay is fastest.
+      var row = rowFor(selected);
+      var reading = relayReading(row);
+      var label = body.querySelector("#room-relay-state");
+      if (label) {
+        label.dataset.tone = reading.dot;
+        var dot = label.querySelector(".dot");
+        if (dot) dot.dataset.latency = reading.dot;
+        // The last text node is the phrase; the dot is the first child.
+        label.lastChild.textContent = reading.label;
+      }
+      var name = body.querySelector("#room-relay .picker-name");
+      if (name) name.textContent = row.name;
+      relayHint();
+    });
 
-    renderNodes();
+    /*
+     * And a third, for the kernel.
+     *
+     * `S.kernel.info` is null until `kernelStore.refresh()` answers, which lands after
+     * this page's first render — so the first paint said 没有找到内核 and disabled 开启房间
+     * on a machine that has one. Without this subscription that state was permanent: the
+     * button stayed disabled and the notice stayed on screen for the life of the page.
+     * Measured, not guessed — the first build of this page did exactly that.
+     *
+     * Targeted rather than a re-render, for the same reason as the node subscription:
+     * the button and the notice are the only two things here that depend on the kernel,
+     * and a re-render would wipe a half-typed port.
+     */
+    unsubscribeKernel = S.kernel.subscribe(function () {
+      var kernel = S.kernel.info;
+      var found = !!(kernel && kernel.found);
+      var button = body.querySelector("#room-start");
+      if (button) button.disabled = !found;
+      var blocked = body.querySelector("#room-blocked");
+      if (blocked) blocked.innerHTML = found ? "" : kernelNotice(kernel);
+    });
 
-    // Redraw when the tunnel changes — including when the 主页 page stops it — when the
-    // node store changes (a probe still running from startup), and when the kernel
-    // does, which is what makes the button appear once a download lands.
-    var unsubscribe = S.tunnel.subscribe(renderTunnel);
-    var unsubscribeKernel = S.kernel.subscribe(renderTunnel);
+    render();
+    detectPort();
+    store.load(false);
 
-    S.termWrite("联机页面已就绪，当前只有「中转 · TCP」可用", "dim");
+    /* One second, and only the age line is rewritten.
+     *
+     * The duration is the only thing on this page that changes on a clock, and the
+     * page the user is looking at while a room is open is exactly the one where a
+     * frozen counter reads as "did it die?". Re-rendering the idle half on a timer
+     * would replace the port field mid-typing, so it does not. */
+    timer = window.setInterval(function () {
+      if (S.tunnel.tunnel) renderAge();
+    }, 1000);
 
     return {
       title: "联机",
+      onHealth: function () { relayHint(); },
       destroy: function () {
-        /* `el` is the same element for the life of the tab, so the two delegated
-           listeners above have to come off by name. `unsubscribe` is not enough:
-           a store subscription is a function the store drops, while a DOM listener
-           stays on the node until it is removed. */
+        // The delegated listeners first: they are on the element the router reuses for
+        // every page, so a leftover would fire on the *next* page's markup.
         el.removeEventListener("click", onPageClick);
-        el.removeEventListener("change", onModeChange);
-        // The relay picker's "click outside closes it" listener lives on the
-        // document, which outlives this page — leaving it behind would keep closing
-        // a list nobody can open any more, once per visit.
+        el.removeEventListener("input", onPageInput);
+        el.removeEventListener("keydown", onPageKeydown);
+
+        window.clearInterval(timer);
+        window.clearTimeout(waiting);
         closePicker();
-        unsubscribe();
-        unsubscribeKernel();
-        unsubscribeNodes();
-        if (ticker) window.clearInterval(ticker);
+        // The dialog belongs to the shell now, so it is closed the same way the version
+        // notice and the guide are — and it has to be closed here, or leaving the page
+        // leaves a room dialog floating over the next one.
+        S.closeDialog();
+
+        if (unsubscribe) unsubscribe();
+        if (unsubscribeNodes) unsubscribeNodes();
+        if (unsubscribeKernel) unsubscribeKernel();
       },
-      onTick: function () {
-        var cells = side ? side.querySelectorAll(".tunnel-cell code") : null;
-        var age = S.tunnel.age();
-        if (S.tunnel.running() && age !== null && cells && cells.length >= 2) {
-          cells[0].textContent = S.relativeTime(age);
-          cells[1].textContent = S.duration(age);
-        }
-      }
     };
   }
 
@@ -1135,24 +1568,12 @@
     var aboutVersion = el.querySelector("#about-version");
     var aboutDownload = el.querySelector("#about-download");
 
-    // The running build, from the client itself rather than from a constant here.
-    S.apiJson("/api/version").then(function (result) {
-      aboutVersion.textContent = versionLabel(result && result.body);
+    // The running build, and the check itself, both go through the shell's
+    // `checkVersion` — the startup notice asks the same question and the two must not be
+    // able to disagree about the answer.
+    S.checkVersion().then(function (body) {
+      aboutVersion.textContent = versionLabel(body);
     });
-
-    /** Which build this browser would need, in the download endpoint's vocabulary. */
-    function platformQuery() {
-      var ua = (navigator.userAgent || "").toLowerCase();
-      var platform = (navigator.platform || "").toLowerCase();
-
-      var os = "windows";
-      if (ua.indexOf("mac") >= 0 || platform.indexOf("mac") >= 0) os = "macos";
-      else if (ua.indexOf("linux") >= 0 || platform.indexOf("linux") >= 0) os = "linux";
-
-      // `arm64` for Apple Silicon and ARM Linux; everything else here is x64.
-      var arch = /arm64|aarch64/.test(ua) || /arm/.test(platform) ? "arm64" : "amd64";
-      return "?kind=webui&platform=" + os + "&arch=" + arch;
-    }
 
     el.querySelector("#about-check").addEventListener("click", function () {
       var button = el.querySelector("#about-check");
@@ -1160,9 +1581,9 @@
       setPill(aboutState, "busy", "检查中…");
       aboutNote.textContent = "正在向官方站点查询最新版本…";
 
-      S.apiJson("/api/version").then(function (result) {
+      S.checkVersion().then(function (body) {
         button.disabled = false;
-        var body = (result && result.body) || {};
+        body = body || {};
         if (body.current) aboutVersion.textContent = versionLabel(body);
 
         if (body.update === true) {
@@ -1196,11 +1617,10 @@
     });
 
     aboutDownload.addEventListener("click", function () {
-      // Handed to the browser as a normal download, which is also what the site's
-      // own download page links to.
-      var url = (S.settings && S.settings.api_base ? S.settings.api_base.replace(/\/+$/, "") : "") +
-        "/api/download/webui" + platformQuery();
-      window.open(url, "_blank", "noopener");
+      // The shell owns this now: the startup notice's "去下载新版本" and this button have
+      // to fetch the same artifact for the same platform, so there is one URL builder and
+      // one place to fix.
+      S.openUpdateDownload();
     });
 
     function fill(loaded) {
@@ -1263,8 +1683,345 @@
     };
   }
 
+  /* ------------------------------------------------------------------- 帮助 */
+
+  /*
+   * 帮助 is one page with a list of questions on it, and this is the first question.
+   *
+   * It is part of the client rather than a link to a website for one reason: the question
+   * ("what is this number you are asking me for?") arrives while somebody is half-way
+   * through opening a room, and sending them to a browser tab loses the room. The pictures
+   * are the client's own assets, so the page also works with no network beyond loopback.
+   *
+   * The list is data because a second question is already known to be coming: one more
+   * entry plus one more article function is the whole change. It only renders as a row of
+   * chips once there is more than one question — a tab bar with a single tab is furniture.
+   */
+  var HELP_TOPICS = [
+    {
+      slug: "port",
+      name: "什么是游戏端口",
+      blurb: "那个数字是什么、在哪看、填到哪",
+      sources: helpSources,
+      article: helpPortArticle,
+    },
+    {
+      slug: "join",
+      name: "朋友怎么加入房间",
+      blurb: "把地址发过去之后，他那边要做的三步",
+      sources: helpSources,
+      article: helpJoinArticle,
+    },
+    {
+      slug: "trouble",
+      name: "朋友连不上怎么办",
+      blurb: "对着屏幕上的报错找，从最常见的那条往下看",
+      sources: caseSources,
+      article: helpTroubleArticle,
+    },
+  ];
+
+  /**
+   * Where the screenshots come from, said before the first one rather than under it.
+   *
+   * A picture of somebody else's game is only useful if the reader can tell whether their
+   * own game looks the same, and the answer here is "yes, if your version and mod list
+   * match" — which is also the first thing that goes wrong when a friend cannot join. So
+   * this line is doing double duty, and it is not a footnote.
+   */
+  function helpSources() {
+    return '<p class="help-sources">图片均来自 <b>Minecraft Java 版 26.3</b>，搭配模组 ' +
+      "<b>LAN World Plug-n-Play (mcwifipnp)</b>（用来关闭正版验证）。" +
+      "版本或模组不同的话，按钮位置可能略有出入。</p>";
+  }
+
+  /**
+   * The troubleshooting page's screenshots, and a different sentence about them than the
+   * one above: those four were taken for the 26.3 walkthrough, while the case screenshots
+   * were collected over months and some of them are visibly older — one is 1.21.11, two are
+   * phone-client layouts. Saying so is the honest version, and it also tells the reader
+   * what to compare: the error *text* is the same on every version, the window around it is
+   * not.
+   */
+  function caseSources() {
+    return '<p class="help-sources">下面这些截图是从历次反馈里攒的，所以版本各不相同' +
+      "（能看出 1.21.11 和手机版的界面）。<b>报错文字本身没变过</b>，" +
+      "对着文字找就行，窗口和按钮会和新版本有些差别。</p>";
+  }
+
+  /**
+   * One screenshot with its caption.
+   *
+   * The caption doubles as the `alt`, which is not laziness: the picture and the sentence
+   * say the same thing on purpose — a screenshot in a guide is there to be *recognised*,
+   * and the text beside it is what says it in words.
+   */
+  function helpShot(file, caption, extraClass) {
+    return '<figure class="help-shot' + (extraClass ? " " + extraClass : "") + '">' +
+      '<img src="' + esc(S.assetUrl("asset/" + file)) + '" alt="' + esc(caption) +
+      '" loading="lazy">' +
+      "<figcaption>" + esc(caption) + "</figcaption></figure>";
+  }
+
+  /** One numbered step of a procedure. */
+  function helpStep(n, html) {
+    return '<p class="help-step"><span class="help-step-num">' + n + "</span>" +
+      "<span>" + html + "</span></p>";
+  }
+
+  /**
+   * One question and its answer, for the page whose whole shape is a list of them.
+   *
+   * `shots` is a list of `[file, caption]` and is optional. A case is much easier to
+   * recognise than to read about, and the reader has their own screen in front of them —
+   * so every case in the troubleshooting list can carry the error it is about.
+   */
+  function helpFaq(question, answer, shots) {
+    return '<div class="help-faq-item"><p class="help-faq-q">' + question + "</p>" +
+      answer +
+      (shots || []).map(function (shot) {
+        return helpShot(shot[0], shot[1], "help-shot--case");
+      }).join("") +
+      "</div>";
+  }
+
+  /** The address, in the article's own words: the thing being copied has two halves. */
+  function addressSample() {
+    return '<code class="help-code">cd.hongshi.site:27913</code>';
+  }
+
+  /**
+   * 什么是游戏端口 — the answer, in three parts: what it is, where to see yours, where to
+   * put it. The middle part is the client's own three-step procedure (ESC → 世界选项 →
+   * 应用更改) with a screenshot per step, because that is the part somebody is following
+   * with the game open on the other monitor.
+   */
+  function helpPortArticle() {
+    return section("端口是游戏开的一扇门", "globe",
+      "<p>开了局域网，Minecraft 就在你这台电脑上开了一扇门，" +
+      "<b>端口就是这扇门的门牌号</b>。</p>" +
+      "<p>它和 IP 不是一回事：IP 是你这栋楼，端口是楼里的哪一间。同一条网线上同时住着网页、" +
+      "下载器和游戏，靠的就是门牌号不同。</p>" +
+      "<p>朋友要进门，只需要知道门牌号；但公网上的人连你的楼在哪儿都看不到 —— 这也是为什么" +
+      "自己开局域网，只有同一条 Wi-Fi 下的人进得来。<b>红石联机做的事，就是把这扇门接到" +
+      "中转服务器上</b>，再给你一个能直接发出去的地址：路由器不用碰，端口映射也不用管。</p>",
+
+      "下面两步在游戏里完成，第三步才回到红石联机。") +
+
+      section("怎么看自己的端口", "console",
+        '<p class="help-lead">以《我的世界》Java 版为例，三步就能看到它。</p>' +
+        helpStep(1, "在游戏里按 <kbd>ESC</kbd> 打开游戏菜单，点「<b>世界选项…</b>」。") +
+        helpShot("help-port-menu.webp", "ESC 菜单：点这里进世界选项") +
+        helpStep(2, "把「多人游戏」点成「<b>局域网</b>」。下面的<b>端口号</b>就是门牌号，" +
+          "默认 25565，想换一个也行。") +
+        helpShot("help-port-lan.webp", "世界选项 → 多人游戏：端口号写在下面") +
+        helpStep(3, "按底部的「<b>应用更改</b>」，聊天框里会冒出一行字，方括号里的数字就是它。") +
+        helpShot("help-port-chat.webp", "聊天框：端口号为 [25565]") +
+        '<p class="help-tip">紧跟着的那行「无法转发端口 … 路由器上未启用 UPnP」' +
+        "<b>不用管它</b>。那是游戏在试着自己打洞，家用路由器上失败是常态；" +
+        "红石联机不走 UPnP，门怎么开出去是交给中转服务器的。</p>",
+
+        // The middle section ends on the answer, so its note is that answer in one line
+        // rather than another sentence of instruction.
+        "看到方括号里那个数字，就已经找到了。") +
+
+      section("填进红石联机", "play",
+        "<p>回到「联机」页，把这个数字填进<b>本地游戏端口</b>。红石一般已经替你探到了，" +
+        "你只要核对一眼；探不到、或者你已经换过端口，就自己改。</p>" +
+        "<p>填错了它就会去敲一扇不存在的门，朋友那边会一直卡在「正在连接」——" +
+        "这种情况先回来看看这个数字对不对。</p>" +
+        "<p>然后按「开启房间」，把弹出来的地址发给朋友，他填进游戏里就能进来了。</p>" +
+        '<p class="help-cta"><a class="btn btn--primary" href="/connect">' +
+        icon("play", "icon--sm") + "去联机页开启房间</a></p>");
+  }
+
+  /**
+   * 朋友怎么加入房间 — the other half of the room flow, and the half that used to be a
+   * sentence in a dialog: "把地址发给他". The person who opens the room never sees these
+   * three screens; the person they send the address to does, so the article is written for
+   * the friend, and the host forwards it.
+   */
+  function helpJoinArticle() {
+    return section("三步进房间", "people",
+      "<p>红石给你的那行地址是可以直接发出去的。朋友那边打开游戏，做三件事：</p>" +
+      helpStep(1, "进游戏，点「<b>多人游戏</b>」。版本和模组要和房主一致 —— " +
+        "左下角写着版本号和模组数量，对不上就会在加载到一半时被踢出来。") +
+      helpShot("help-join-main.webp", "主界面：左下角写着版本与模组数，点「多人游戏」") +
+      helpStep(2, "等它扫完局域网。这里通常什么都扫不到 —— 那是正常的，红石的房间不在局域网里，" +
+        "所以直接点右下角的「<b>直接连接</b>」。") +
+      helpShot("help-join-multiplayer.webp", "多人游戏界面：点右下角的「直接连接」") +
+      helpStep(3, "把地址<b>整行</b>粘进「服务器地址」，点「<b>加入服务器</b>」。") +
+      helpShot("help-join-direct.webp", "直接连接：粘贴地址，点「加入服务器」") +
+
+      '<p class="help-tip">地址长这样：' + addressSample() + "。冒号前面是中转服务器的地址，" +
+      "冒号后面是这次房间的端口 —— <b>少一半都进不来</b>。所以别手打，整行复制过去。</p>",
+
+      "进不去的话，先看「朋友连不上怎么办」。") +
+
+      section("房间开着的这一段时间", "link",
+        "<p>房间只在<b>红石显示着地址</b>的时候存在。点了「关闭房间」，或者房主把客户端关掉，" +
+        "这行地址就失效了，朋友会卡在「正在连接」。</p>" +
+        "<p>房主那边退出世界、电脑休眠、断网，也会掉线：隧道还开着，但门后面没有人了。" +
+        "重新开一次房间，地址会换一个新的，记得重新发。</p>" +
+        '<p class="help-cta"><a class="btn btn--ghost" href="/help/trouble">' +
+        icon("warn", "icon--sm") + "常见问题：朋友连不上怎么办？</a></p>");
+  }
+
+  /**
+   * 朋友连不上怎么办 — written backwards from the screen.
+   *
+   * Somebody opens this page with a game window behind it showing a sentence, so every case
+   * leads with **that sentence verbatim**, in the monospace face the game uses, and only
+   * then says what it means. The order is by frequency, and the one case that needs the
+   * *host* to act is marked as the fiddly one, because the friend reading this cannot fix
+   * it alone.
+   *
+   * The cases themselves come from the support deck the team kept before this page existed
+   * (`常见问题.pdf`); its screenshots are in `web/asset/help-trouble-*.webp`. Two things in
+   * it were out of date and are fixed here rather than carried over: port forwarding is not
+   * something this product needs (relaying is the whole point), and the "无效会话" and
+   * "无效的玩家档案公钥签名" are one cause with two wordings.
+   */
+  function helpTroubleArticle() {
+    return section("先自检三件事", "check",
+      "<p>这三条里有一条对不上，多半就是它了；三条都对得上，再往下按报错找。</p>" +
+      '<ol class="help-check">' +
+      "<li>房主那边的红石<b>还显示着那行地址</b>吗？如果显示的是「开启房间」按钮，说明房间已经关了。</li>" +
+      "<li>两个人的<b>版本号和模组数量一样</b>吗？主界面左下角就写着。</li>" +
+      "<li>地址是<b>整行复制</b>过去的吗？" + addressSample() + "，两段都不能少。</li>" +
+      "</ol>",
+
+      "顺带说一句：红石联机的地址只在房间开着的时候有效。") +
+
+      section("对着报错找", "warn",
+        helpFaq(
+          '<code class="help-code">无效会话</code> / ' +
+          '<code class="help-code">无效的玩家档案公钥签名</code>',
+          "<p>两句是同一个原因：<b>双方至少有一方是离线用户</b>，而开房间那一侧还开着正版验证，" +
+          "登录的时候对不上。</p>" +
+          '<ul><li>装 <b>LAN World Plug-n-Play (mcwifipnp)</b> 或 <b>LAN Server Properties</b> ' +
+          "把正版验证关掉 —— <b>房主必须装</b>（要关的是开房间那一侧），朋友也装上更稳；</li>" +
+          "<li>关完<b>重启一次世界</b>，再重新开局域网；</li>" +
+          "<li>两边都是正版账号却还报这句：重启游戏，在启动器里重新登录一次。</li></ul>",
+          [["help-trouble-signature.webp", "连接已丢失：无效的玩家档案公钥签名"]]) +
+
+        helpFaq(
+          "服务器发送含有未知键的注册表（Registry / Mod Mismatch）",
+          "<p>两边的<b>模组不同步</b>：房主装了某个模组你没有，或者版本对不上。" +
+          "报错里会点名是哪个模组 —— 截图里是 " +
+          '<code class="help-code">redstoneonline:example_item</code>。</p>' +
+          '<ul><li>照着报错里的模组名去补，两边装成一模一样；</li>' +
+          "<li>最省事的不是一个个补：让房主把 <b>mods 文件夹</b>（或者整个整合包）打包发给你；</li>" +
+          "<li><b>版本号也要一致</b>（26.3 对 26.3）。小地图、光影这类客户端模组影响小，" +
+          "内容类、服务端模组必须一样。</li></ul>",
+          [["help-trouble-registry.webp", "连接已丢失：服务器发送含有未知键的注册表"]]) +
+
+        helpFaq(
+          '<code class="help-code">Unknown host</code>（未知主机）',
+          "<p>地址写错了。注意<b>这不是端口错</b> —— 游戏连域名都没解析出来，" +
+          "所以<b>和房主那边的状态无关</b>。</p>" +
+          '<ul><li>常见的错法：把冒号打成了中文「：」、混进全角字符、字母看错（<code class="help-code">l</code> 和 ' +
+          '<code class="help-code">1</code>、<code class="help-code">o</code> 和 ' +
+          '<code class="help-code">0</code>）、漏字符、末尾多了空格、只复制了冒号前面一半；</li>' +
+          "<li>整行复制粘贴，别手打，粘完看一眼冒号前后；</li>" +
+          "<li>换了地址还这样，用手机热点试一次（本机 DNS 的问题，少见）。</li></ul>",
+          [["help-trouble-unknownhost.webp", "无法连接至服务器：Unknown host"]]) +
+
+        helpFaq(
+          '<code class="help-code">Connection refused: getsockopt</code> / ' +
+          '<code class="help-code">连接中断</code>' +
+          '<span class="help-tag">较麻烦</span>',
+          "<p>地址是<b>对的</b>，但那扇门后面没有人。按这个顺序查，四条都在房主那边：</p>" +
+          "<ol><li>红石上<b>还显示着地址</b>吗？显示「开启房间」= 房间关了，或者客户端退了；</li>" +
+          "<li>房主的<b>游戏世界还开着</b>吗？退出世界 = 门后面没人；</li>" +
+          "<li>红石里填的<b>本地游戏端口</b>，和游戏里报出来的端口对得上吗？" +
+          "换过世界、重开过局域网，这个数字就会变；</li>" +
+          "<li>房主电脑的<b>防火墙</b>或安全软件拦了红石或游戏 —— 最少见，但确实有。</li></ol>" +
+          '<p class="help-tip"><b>红石联机不需要端口映射。</b>' +
+          "网上那些让你去路由器上开端口的教程，这里用不上 —— 门是从中转服务器开出去的。" +
+          "另外房主<b>重开一次房间会换一个新地址</b>，记得让他重新发。</p>",
+          [["help-trouble-refused.webp", "无法连接至服务器：Connection refused: getsockopt"],
+           ["help-trouble-lost.webp", "进去一会儿之后：连接中断"]]) +
+
+        helpFaq(
+          "暂时无法连接到身份验证服务器 / 身份验证失败",
+          "<p>微软的验证服务器连不上，或者你的网络到它不通。<b>这一条跟红石联机、跟游戏本身都没有关系</b>，" +
+          "大概率也不是你的问题。</p>" +
+          '<ul><li>先问一句是不是只有你一个人这样：大家都不行，就是微软那边在抽风，等一会儿再来；</li>' +
+          "<li>只有你不行，就是你的网络到验证服务器的链路问题，开加速器或者换个网络再试。</li></ul>",
+          [["help-trouble-auth.webp", "无法连接至服务器：登录失败，暂时无法连接到身份验证服务器"]]) +
+
+        "",
+
+        "报错文字和上面任何一条都不像的话，往下看最后一段。") +
+
+      section("还是不行", "people",
+        "<p>上面的清单里没有你的报错，或者照着试完还是进不去 —— 来官方 Q 群问一句。</p>" +
+        '<p class="help-cta">' +
+        '<button type="button" class="btn btn--primary" data-copy="497060189">' +
+        icon("copy", "icon--sm") + "复制群号 497060189</button>" +
+        '<a class="btn btn--ghost" href="/connect">' +
+        icon("play", "icon--sm") + "回到联机页</a></p>" +
+        "<p>顺带带上这三样，基本当场就能定位：</p>" +
+        "<ul>" +
+        "<li>屏幕上的<b>报错截图</b>（房主和朋友两边都截一张）；</li>" +
+        "<li>两边的<b>版本号和模组数量</b>（主界面左下角）；</li>" +
+        "<li>红石那边是<b>显示着地址</b>，还是<b>「开启房间」按钮</b>。</li>" +
+        "</ul>");
+  }
+
+  /**
+   * One help page, rendered for one question.
+   *
+   * `/help` and `/help/<slug>` are the same document (the shell serves every route the
+   * same way), so both land here: with nothing to name, the first question is the one
+   * shown, which is also what `/help` should do once there are five.
+   */
+  function helpPage(el, slug) {
+    var topic = HELP_TOPICS.filter(function (entry) { return entry.slug === slug; })[0] ||
+      HELP_TOPICS[0];
+
+    var topics = HELP_TOPICS.length > 1
+      ? '<nav class="help-topics" aria-label="帮助目录">' +
+        HELP_TOPICS.map(function (entry) {
+          var here = entry === topic;
+          return '<a class="help-topic" href="/help/' + entry.slug + '"' +
+            (here ? ' aria-current="page"' : "") + ">" + esc(entry.name) + "</a>";
+        }).join("") + "</nav>"
+      : "";
+
+    // `sources` marks the questions whose screenshots need saying where they came from —
+    // and it is said *before* the first one, because "does my game look like this?" is the
+    // question the reader has while looking at somebody else's menu bar.
+    el.innerHTML = topics + pageHead(topic.name, esc(topic.blurb)) +
+      (topic.sources ? topic.sources() : "") +
+      '<article class="help-article">' + topic.article() + "</article>";
+
+    /*
+     * The one control in 帮助 that does something: the Q group number.
+     *
+     * Reading six digits off a screen and typing them into a phone is exactly where people
+     * give up, so it is a button that copies. Bound to the element rather than delegated —
+     * it lives inside `#page`, which the router empties on the way out, so the listener
+     * leaves with the markup it belongs to.
+     */
+    el.querySelectorAll("[data-copy]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        S.copyText(button.dataset.copy, "群号");
+      });
+    });
+
+    return { title: topic.name };
+  }
+
   /* ---------------------------------------------------------------- register */
 
+  // `/help` is the page and `/help/<slug>` is a question in it. Both are registered, so
+  // neither falls through to the "not built yet" placeholder.
+  S.register("help", function (el) { return helpPage(el, null); });
+  S.register("help/port", function (el) { return helpPage(el, "port"); });
+  S.register("help/join", function (el) { return helpPage(el, "join"); });
+  S.register("help/trouble", function (el) { return helpPage(el, "trouble"); });
   S.register("home", homePage);
   S.register("connect", connectPage);
   S.register("settings", settingsPage);

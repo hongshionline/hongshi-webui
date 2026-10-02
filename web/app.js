@@ -12,8 +12,11 @@
 (function () {
   "use strict";
 
-  var SIDE_KEY = "hongshi.shell.side";
   var PAGE_POLL_MS = 3000;
+  /* How long the startup update check waits before it may put a modal on screen. Long
+     enough that the first page has painted and settled, short enough that a user who
+     opened the client to do one thing still sees it. */
+  var UPDATE_CHECK_DELAY_MS = 2500;
   /* Drives the 创建于 / 已运行 counters. Ten seconds, not one: they are formatted
      coarsely ("2 分钟前"), and a per-second timer is a per-second wake-up for a
      number that reads the same either way. */
@@ -145,20 +148,27 @@
     drawer.hidden = !open;
     appEl.dataset.drawer = open ? "open" : "closed";
 
-    // The switch has to say which way it goes, and it is the only control that is
-    // present whether the panel is open or closed.
-    var toggle = document.getElementById("log-toggle");
-    if (toggle) {
-      toggle.setAttribute("aria-expanded", open ? "true" : "false");
-      toggle.setAttribute("aria-label", open ? "收起日志" : "展开日志");
-      toggle.setAttribute("title", open ? "收起日志" : "日志");
-    }
+    // The panel has no switch in the top bar any more, so the page that opens it is
+    // also the only thing that says it is open — `aria-expanded` lives on whatever
+    // control called this, not here. What this does keep is the one thing the panel
+    // itself cannot: Escape. Without it the only ways out are navigating away or
+    // reloading, because the header deliberately has no close button.
+    drawer.setAttribute("aria-hidden", open ? "false" : "true");
 
     // The kernel's log is only worth polling while something is worth watching: a
     // live kernel, or an open panel waiting for one.
     if (open) kernelStore.watch(true);
     else kernelStore.watch(!!(kernelStore.info && kernelStore.info.running));
   }
+
+  /* Escape closes the log panel. On `document`, not on the drawer: the drawer is not
+     focused when it opens, so a listener on it would never fire, and the key has to
+     work from wherever the user's focus happens to be. */
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape" && event.key !== "Esc") return;
+    if (!drawerIsOpen()) return;
+    drawerOpen(false);
+  });
 
   function drawerIsOpen() {
     return drawer && !drawer.hidden;
@@ -610,6 +620,770 @@
     toastTimer = window.setTimeout(function () { toastEl.hidden = true; }, ms || 4200);
   }
 
+  /* ----------------------------------------------------------------- dialogs */
+
+  /*
+   * One dialog at a time, and here rather than in a page, because the client has three of
+   * them and only one of the three belongs to a page: the room address (联机), the
+   * new-version notice and the first-run guide (both the shell's own). Writing the same
+   * overlay in three places is how a client ends up with three corner radii.
+   *
+   * Everything the shell opens shares the same three ways out — the button, the backdrop
+   * and Escape — and that is what stops a dialog from feeling like a trap. They differ
+   * only in what they say, so the API is markup in, element out.
+   */
+  var openOverlay = null;
+  var openDialogElement = null;
+  var openOnClose = null;
+
+  /** Close whatever is open. Safe to call when nothing is. */
+  function closeDialog() {
+    var overlay = openOverlay;
+    var onClose = openOnClose;
+    try {
+      document.removeEventListener("keydown", onDialogEscape);
+      document.documentElement.classList.remove("has-dialog");
+    } finally {
+      openOverlay = null;
+      openDialogElement = null;
+      openOnClose = null;
+      if (overlay) overlay.remove();
+    }
+    // After the overlay is gone, so a dialog this opens is the only one on screen. It runs
+    // for every way out — the button, Escape, the backdrop — because the callers that want
+    // it are asking "was this message seen", and which key dismissed it does not matter.
+    if (onClose) onClose();
+  }
+
+  function onDialogEscape(event) {
+    if (event.key === "Escape" || event.key === "Esc") closeDialog();
+  }
+
+  /**
+   * Show a dialog. `html` is the whole panel, and `after` gets the panel and the overlay
+   * so the caller can wire its own controls.
+   *
+   * Only one is ever open: opening a second closes the first, which is not just tidiness
+   * — the update notice fires on startup and the room dialog can be triggered a second
+   * later, and two stacked overlays look like a bug in the page rather than like two
+   * messages.
+   *
+   * `onClose` runs when this dialog goes away, however it goes away. It exists for the one
+   * caller that has something to say *after* a message rather than instead of it — the
+   * tenth-launch thank-you, which waits for the room dialog to be dismissed.
+   */
+  function openDialog(html, after, wide, onClose) {
+    closeDialog();
+
+    var overlay = document.createElement("div");
+    overlay.className = "dlg-overlay";
+    overlay.innerHTML = '<div class="dlg' + (wide ? " dlg--wide" : "") +
+      '" role="dialog" aria-modal="true">' + html + "</div>";
+
+    document.body.appendChild(overlay);
+
+    openOverlay = overlay;
+    openDialogElement = overlay.firstElementChild;
+    openOnClose = typeof onClose === "function" ? onClose : null;
+
+    // A dialog can open *under* the pointer that asked for it: the room dialog appears
+    // about 200ms after 开启房间 is pressed, so the second click of a double-click — or an
+    // automated click that retried because the button it aimed at had just been covered —
+    // lands on the backdrop and dismisses the message before it can be read. Ignoring
+    // backdrop clicks for the first third of a second costs a deliberate dismissal nothing
+    // and stops a dialog from being closed by the gesture that opened it.
+    var openedAt = Date.now();
+    overlay.addEventListener("click", function (event) {
+      // The backdrop only. A click that started inside the panel and drifted out would
+      // otherwise close the dialog the user was reading.
+      if (event.target !== overlay) return;
+      if (Date.now() - openedAt < 350) return;
+      closeDialog();
+    });
+    document.addEventListener("keydown", onDialogEscape);
+
+    var close = overlay.querySelector("[data-dialog-close]");
+    if (close) close.addEventListener("click", closeDialog);
+
+    if (typeof after === "function") after(openDialogElement, overlay);
+    return openDialogElement;
+  }
+
+  function dialogIsOpen() {
+    return !!openOverlay;
+  }
+
+  /**
+   * The standard header and footer, so every dialog's title reads the same size and its
+   * buttons land in the same corner.
+   *
+   * `actions` is markup rather than a list of descriptors: each dialog's buttons do
+   * genuinely different things, and a descriptor format that could express all three
+   * would be longer than the markup it replaced.
+   */
+  function dialogTitle(text) {
+    return '<h2 class="dlg-title">' + escapeHtml(text) + "</h2>";
+  }
+
+  function dialogActions(actions) {
+    return '<div class="dlg-actions">' + actions + "</div>";
+  }
+
+  function dialogCloseButton() {
+    return '<button type="button" class="dlg-close" data-dialog-close aria-label="关闭">' +
+      icon("close", "icon--sm") + "</button>";
+  }
+
+  /* ------------------------------------------------------------------ guide */
+
+  /** Where "this user has seen the guide" is remembered. */
+  var GUIDE_SEEN_KEY = "hongshi.shell.guide.seen";
+
+  /** Air around a lifted control: how far the ring stands off it, in pixels. */
+  var GUIDE_PAD = 8;
+
+  function guideSeen() {
+    try {
+      return window.localStorage.getItem(GUIDE_SEEN_KEY) === "1";
+    } catch (err) {
+      // No storage (private mode): the guide then shows on every launch. The annoying
+      // failure is the safe one here — the alternative is a first run with no guidance.
+      return false;
+    }
+  }
+
+  function rememberGuideSeen() {
+    try {
+      window.localStorage.setItem(GUIDE_SEEN_KEY, "1");
+    } catch (err) {
+      /* ignoring storage is the documented fallback above */
+    }
+  }
+
+  /*
+   * The first-run guide is a **spotlight**, not a slideshow.
+   *
+   * The first version was four dialogs with a diagram each, and it was the wrong shape for
+   * the job: it described the interface in a place where the interface was not, so the user
+   * read about a button and then had to find it. A spotlight puts the words next to the
+   * thing they are about, on the real page, and gets out of the way one element at a time.
+   *
+   * Each step is therefore a *target plus a sentence*, and the guide never invents a
+   * surface of its own: it dims everything and lifts one real control out of the dim.
+   */
+  var GUIDE_STEPS = [
+    {
+      target: '.nav-item[data-page="connect"]',
+      where: "below",
+      text: "点击切换联机页。",
+      // Nothing to wait for: the top bar is in the static markup and is on every page.
+      advanceOn: "click",
+      // The internal router, not `Shell.go`: this file *is* `window.Shell`, so there is
+      // no `S` to reach through here.
+      prepare: function () { go("home"); },
+    },
+    {
+      target: "#room-relay",
+      /*
+       * Above, not below, and this is the one placement in the guide that is not a
+       * preference. The relay list opens downwards out of this control, so a card under it
+       * does not merely look cluttered — it sits on top of the list the user was just asked
+       * to read, and the rows underneath it cannot be clicked at all.
+       */
+      where: "above",
+      text: "选择一台离你最近的服务器。不确定的话就选「自动选择」，它会挑延迟最低的那个。",
+      /*
+       * This step's action is deliberately *not* the way on.
+       *
+       * Clicking this control opens the list; it does not finish the choice. Advancing on
+       * that first click would move the ring down to the port row while the list the user
+       * was just told to read is still hanging open under it, and a tour that walks away
+       * mid-sentence is worse than one that waits to be dismissed. So this step and the
+       * next one carry a button; the first and last advance by doing the thing.
+       */
+      nextLabel: "知道了",
+    },
+    {
+      target: ".room-port-row",
+      where: "above",
+      // The link is a real `href` rather than a binding, so the browser's own affordances —
+      // middle click, copy link, open in a new tab — work, and it goes through the router
+      // like every other internal link. It leaves the tour: walking off to read the help
+      // is not the same as saying "I am done with this", so `finishGuide(false)` below
+      // does not write the seen flag and the last step is still there next launch.
+      text: "红石会自动帮你探测游戏端口（前提是游戏已经开了局域网）。你也可以自己填。" +
+        ' <a class="guide-link" href="/help/port">不知道什么是游戏端口？点我</a>',
+      /*
+       * The other button, and this is the step that needs it for a plain reason: it
+       * describes a *fact* (the port is detected) and has no action of its own, so without
+       * a button the only way on is 跳过 — the opposite of what the step is for.
+       */
+      nextLabel: "知道了",
+    },
+    {
+      target: "#room-start",
+      // The top of the page, not above the button: see `where: "top"` in `placeGuide`.
+      where: "top",
+      text: "最后点这里就能开启房间了。开好之后把弹出的地址发给朋友，他在游戏里填上就能进来。",
+      advanceOn: "click",
+      /*
+       * The fallback button, and the *conditional* sentence above it.
+       *
+       * Two things go wrong if this step is left to advance on its own click:
+       *
+       *   1. Without a kernel the button is `disabled`, and a disabled button dispatches no
+       *      click event at all — so the guide could never be finished by doing the thing
+       *      it asks for. The 知道了 button is the way out.
+       *   2. A user who is told to press a button that will not press needs to be told why.
+       *      `prepare` reads the kernel store and adds a line naming the download button
+       *      when the kernel is missing, which is exactly the situation the guide exists to
+       *      explain.
+       */
+      prepare: function () {
+        var kernel = kernelStore.info;
+        if (!kernel || kernel.found) return;
+        GUIDE_STEPS[3].text =
+          "最后点这里就能开启房间了。开好之后把弹出的地址发给朋友，他在游戏里填上就能进来。" +
+          '<br><br>不过现在它还是灰的：<strong>你还没装内核</strong>。' +
+          "先点上面那个「自动下载内核」，装好之后这个按钮就能按了。";
+      },
+      nextLabel: "知道了",
+    },
+  ];
+  var guideState = null;
+
+  /**
+   * Run the guide.
+   *
+   * Returns whether it ran, so a caller can decide what to do instead — the point of a
+   * guide is to be over, not to be a mode.
+   */
+  function showGuide() {
+    if (guideSeen()) return false;
+    if (guideState) return true;
+
+    var overlay = document.createElement("div");
+    overlay.className = "guide";
+    overlay.innerHTML =
+      '<div class="guide-ring" id="guide-ring"></div>' +
+      '<div class="guide-card" id="guide-card">' +
+      '<p class="guide-text" id="guide-text"></p>' +
+      '<div class="guide-foot">' +
+      '<span class="guide-count" id="guide-count"></span>' +
+      '<button type="button" class="guide-next" id="guide-next" hidden></button>' +
+      '<button type="button" class="guide-skip" id="guide-skip">跳过</button>' +
+      "</div></div>";
+
+    document.body.appendChild(overlay);
+
+    guideState = {
+      index: 0,
+      overlay: overlay,
+      ring: overlay.querySelector("#guide-ring"),
+      card: overlay.querySelector("#guide-card"),
+      text: overlay.querySelector("#guide-text"),
+      count: overlay.querySelector("#guide-count"),
+      timer: null,
+      watching: null,
+      cleanups: [],
+    };
+
+    /*
+     * Clicking the dimmed area ends the guide, because a guide that will not go away is
+     * worse than no guide.
+     *
+     * This is a listener on the *document* rather than on the overlay, and that is not a
+     * detail: the overlay is `pointer-events: none` so the page underneath stays live, which
+     * also means the overlay never receives a click to react to. The capture phase, so a
+     * click the page stops before it bubbles is still noticed here.
+     *
+     * "Was this click meant for the lifted control?" is answered by *geometry*, and that is
+     * not fussiness either. Every page here replaces its own contents on each store
+     * publication; when a replacement lands between the press and the release, the browser
+     * retargets the click at the common ancestor, so a press the user aimed squarely at the
+     * relay picker can arrive with `#room-body` as its `target`. Coordinates are what the
+     * user actually aimed at.
+     */
+    guideState.onDocumentClick = function (event) {
+      if (!guideState) return;
+      // A keyboard click (Enter on the focused control) reports 0,0. Tab-to-it-and-press is
+      // not a click on the dimmed page, so it is never an exit.
+      if (!event.clientX && !event.clientY) return;
+      if (guideInside(event)) return;
+      finishGuide(false);
+    };
+    document.addEventListener("click", guideState.onDocumentClick, true);
+
+    // Escape is the same kind of "no thanks" as 跳过, and deliberate rather than incidental,
+    // so unlike a stray click it is remembered.
+    guideState.onKey = function (event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      finishGuide(true);
+    };
+    document.addEventListener("keydown", guideState.onKey, true);
+
+    overlay.querySelector("#guide-skip").addEventListener("click", function (event) {
+      event.stopPropagation();
+      finishGuide(true);
+    });
+
+    // The link in step 3 leaves the tour to go and read something, so the ring stops
+    // pointing at a row that is no longer on the page. Not remembered: walking off to read
+    // the help is not the same as saying "I am done with this", and the last step has not
+    // been seen yet.
+    overlay.addEventListener("click", function (event) {
+      if (event.target.closest(".guide-link")) finishGuide(false);
+    });
+
+    // The explicit "go on" control. Only the steps that describe a fact use it — see
+    // `nextLabel` in `GUIDE_STEPS` — and it is one button whose label and visibility are
+    // set per step rather than one control per step.
+    overlay.querySelector("#guide-next").addEventListener("click", function (event) {
+      event.stopPropagation();
+      if (guideState) stepGuide(guideState.index + 1);
+    });
+
+    /*
+     * A resize or a scroll invalidates every coordinate the guide is holding. Re-placing
+     * is the honest response; leaving a ring where the button used to be is the kind of bug
+     * that makes a guide look broken rather than merely stale.
+     */
+    guideState.onViewportChange = function () { placeGuide(); };
+    window.addEventListener("resize", guideState.onViewportChange);
+    window.addEventListener("scroll", guideState.onViewportChange, true);
+
+    stepGuide(0);
+    return true;
+  }
+
+  /**
+   * Show one step, and wait for its target if the page is not there yet.
+   *
+   * The waiting is the part that makes this work at all: step 1 tells the user to click
+   * 联机, so by step 2 the router is mid-navigation and the relay picker does not exist.
+   * A guide that looked for its target once and gave up would fail on the one step whose
+   * whole subject is "go to the other page".
+   */
+  function stepGuide(index) {
+    var state = guideState;
+    if (!state) return;
+
+    state.index = index;
+    clearGuideTimers();
+
+    var step = GUIDE_STEPS[index];
+    if (!step) {
+      // Past the last step: the tour was walked to the end, which counts as seen.
+      finishGuide(true);
+      return;
+    }
+
+    if (step.prepare) step.prepare();
+
+    state.count.textContent = "第 " + (index + 1) + " / " + GUIDE_STEPS.length + " 步";
+    state.text.innerHTML = step.text;
+
+    // One button, shown only by the steps that need it.
+    var nextButton = state.overlay.querySelector("#guide-next");
+    nextButton.hidden = !step.nextLabel;
+    if (step.nextLabel) nextButton.textContent = step.nextLabel;
+
+    state.watching = function () {
+      if (!guideState) return;
+      var target = document.querySelector(step.target);
+      // A target with no box is a target that is not on screen yet — a page still
+      // animating in, a list still rendering. Keep waiting rather than pointing at 0,0.
+      if (!target || !target.getBoundingClientRect().width) {
+        state.timer = window.setTimeout(state.watching, 90);
+        return;
+      }
+      placeGuide();
+      if (step.advanceOn === "click") watchForAdvance(step, target);
+    };
+    state.watching();
+  }
+
+  /**
+   * Move on when the user does the thing the step asked for.
+   *
+   * Listening at the document in the capture phase, because the click may be stopped by
+   * the page before it bubbles — the router calls `preventDefault` on the nav link, and a
+   * listener that waited for the bubble would never hear the click it depends on.
+   */
+  function watchForAdvance(step, target) {
+    var state = guideState;
+    var handler = function (event) {
+      if (!target.contains(event.target)) return;
+      detach();
+      // One frame, so a click that changes the page has swapped it before the next step
+      // goes looking for its own target.
+      window.requestAnimationFrame(function () {
+        if (guideState) stepGuide(state.index + 1);
+      });
+    };
+    var detach = function () {
+      document.removeEventListener("click", handler, true);
+      state.cleanups = state.cleanups.filter(function (entry) { return entry !== detach; });
+    };
+
+    document.addEventListener("click", handler, true);
+    state.cleanups.push(detach);
+  }
+
+  /** Put the ring on the target and the card where it fits. */
+  function placeGuide() {
+    var state = guideState;
+    if (!state) return;
+    var step = GUIDE_STEPS[state.index];
+    if (!step) return;
+
+    var target = document.querySelector(step.target);
+    if (!target || !target.getBoundingClientRect().width) return;
+
+    var box = target.getBoundingClientRect();
+    var pad = GUIDE_PAD;
+    var vw = window.innerWidth;
+    var vh = window.innerHeight;
+
+    // The ring is drawn as a huge outline, which is what makes the dimming follow a
+    // rounded box: the ring is transparent and its `box-shadow` does the shading, so the
+    // shape of the hole is exactly the shape of the element.
+    state.ring.style.top = (box.top - pad) + "px";
+    state.ring.style.left = (box.left - pad) + "px";
+    state.ring.style.width = (box.width + pad * 2) + "px";
+    state.ring.style.height = (box.height + pad * 2) + "px";
+
+    /*
+     * Nothing is drawn over the target but a shadow, so there is no click-through layer to
+     * manage: the lifted control is the one the user presses. The ring is a fixed box the
+     * size of the target plus a little air, and its `box-shadow` dims everything else.
+     */
+    var card = state.card;
+    card.style.maxWidth = Math.min(340, vw - 32) + "px";
+    card.style.left = "0px";
+    card.style.top = "0px";
+    var cardBox = card.getBoundingClientRect();
+
+    var margin = 12;
+    var left = box.left + box.width / 2 - cardBox.width / 2;
+    left = Math.max(margin, Math.min(left, vw - cardBox.width - margin));
+
+    var below = box.bottom + pad + margin;
+    var above = box.top - pad - margin - cardBox.height;
+    /*
+     * Prefer what the step asked for, then fall back to whichever side has the room, then to
+     * the bottom of the window. A card pushed off screen is worse than one on the "wrong"
+     * side of its target.
+     *
+     * `where: "top"` is the one placement that is not about the target at all: it means "the
+     * top of the page, under the top bar", and it exists for the last step, whose target
+     * sits near the bottom of a window with nothing below it. A card above that target is
+     * the only other option, and it lands squarely on the two controls the step talks about
+     * — the 开启房间 button itself and, with no kernel installed, the download button the
+     * same sentence tells the user to press. Covering the page's heading instead is the
+     * cheapest place to lose 150 pixels.
+     */
+    var topBar = parseFloat(
+      window.getComputedStyle(document.documentElement).getPropertyValue("--topbar-h"));
+    var top;
+    if (step.where === "below" && below + cardBox.height <= vh - margin) top = below;
+    else if (step.where === "above" && above >= margin) top = above;
+    else if (step.where === "top") top = (topBar > 0 ? topBar : 60) + margin;
+    else if (below + cardBox.height <= vh - margin) top = below;
+    else if (above >= margin) top = above;
+    else top = Math.max(margin, vh - cardBox.height - margin);
+
+    card.style.left = Math.round(left) + "px";
+    card.style.top = Math.round(top) + "px";
+  }
+
+  /**
+   * Whether a click at these coordinates was aimed at the guide rather than past it.
+   *
+   * Three boxes count as inside: the card, the lifted control, and any list that control
+   * has opened. The last one is the reason this is a list and not a single test — a popover
+   * belongs to the thing that opened it and hangs outside its box, so choosing a relay is
+   * part of the step rather than an exit from it.
+   */
+  function guideInside(event) {
+    var state = guideState;
+    if (!state) return false;
+
+    var boxes = [state.card.getBoundingClientRect()];
+    var target = document.querySelector(GUIDE_STEPS[state.index].target);
+    if (target) boxes.push(target.getBoundingClientRect());
+    var open = document.querySelector(".picker-list:not([hidden])");
+    if (open) boxes.push(open.getBoundingClientRect());
+
+    for (var i = 0; i < boxes.length; i++) {
+      var box = boxes[i];
+      // A little air, so the edge of the ring is still the ring.
+      if (event.clientX >= box.left - GUIDE_PAD && event.clientX <= box.right + GUIDE_PAD &&
+          event.clientY >= box.top - GUIDE_PAD && event.clientY <= box.bottom + GUIDE_PAD) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function clearGuideTimers() {
+    var state = guideState;
+    if (!state) return;
+    window.clearTimeout(state.timer);
+    state.timer = null;
+    state.cleanups.forEach(function (detach) { detach(); });
+    state.cleanups = [];
+  }
+
+  /**
+   * Take the guide off the screen. Safe to call when it is not running.
+   *
+   * `remember` says whether this was the user deciding they are done with the guide — 跳过,
+   * Escape, or reaching the end — as opposed to a click that happened to land somewhere
+   * else, or the step-3 link that walks off to read the help. Only the deliberate exits
+   * write the flag, so a stray click does not cost somebody the rest of the tour, and a
+   * real 跳过 is honoured for good.
+   */
+  function finishGuide(remember) {
+    var state = guideState;
+    if (!state) return;
+
+    clearGuideTimers();
+    guideState = null;
+
+    window.removeEventListener("resize", state.onViewportChange);
+    window.removeEventListener("scroll", state.onViewportChange, true);
+    document.removeEventListener("click", state.onDocumentClick, true);
+    document.removeEventListener("keydown", state.onKey, true);
+    state.overlay.remove();
+    if (remember) rememberGuideSeen();
+  }
+
+  /**
+   * Show the guide on a first run, and only on a first run.
+   *
+   * The `seen` flag is the primary test, but it is not sufficient on its own: a build
+   * handed to somebody who has been using the client for weeks would show them the guide
+   * again, which reads as the program having forgotten them. A kernel already installed is
+   * evidence of a previous run, so it counts as "seen" and is recorded as such — the flag
+   * is written, not just checked, so the work is done once rather than on every launch.
+   */
+  function announceGuide() {
+    if (guideSeen()) return;
+
+    var kernel = kernelStore.info;
+    if (kernel && kernel.found) {
+      rememberGuideSeen();
+      return;
+    }
+    showGuide();
+  }
+
+  /* ------------------------------------------------------------------ updates */
+
+
+  /** Where "the user has already been told about this version" is remembered. */
+  var UPDATE_SEEN_KEY = "hongshi.shell.update.seen";
+
+  function updateSeen(version) {
+    try {
+      return window.localStorage.getItem(UPDATE_SEEN_KEY) === version;
+    } catch (err) {
+      // No storage (private mode): the notice then shows once per launch rather than
+      // once per version. Annoying, never wrong.
+      return false;
+    }
+  }
+
+  function rememberUpdateSeen(version) {
+    try {
+      window.localStorage.setItem(UPDATE_SEEN_KEY, version);
+    } catch (err) {
+      /* ignoring storage is the documented fallback above */
+    }
+  }
+
+  /**
+   * Which build this browser would need, in the download endpoint's vocabulary.
+   *
+   * Read from the browser rather than from the client, and that is not a guess: the
+   * *page* is what is being replaced, so the browser is the thing whose platform matters.
+   */
+  function platformQuery() {
+    var ua = (navigator.userAgent || "").toLowerCase();
+    var platform = (navigator.platform || "").toLowerCase();
+
+    var os = "windows";
+    if (ua.indexOf("mac") >= 0 || platform.indexOf("mac") >= 0) os = "macos";
+    else if (ua.indexOf("linux") >= 0 || platform.indexOf("linux") >= 0) os = "linux";
+
+    var arch = /arm64|aarch64/.test(ua) || /arm/.test(platform) ? "arm64" : "amd64";
+    return "?kind=webui&platform=" + os + "&arch=" + arch;
+  }
+
+  /**
+   * Hand the new build to the browser as an ordinary download.
+   *
+   * A normal download rather than a self-replacing update: the artifact the site serves
+   * is a whole new executable, and an application that overwrites its own binary while it
+   * is running is a much larger promise than this client wants to make. The same URL the
+   * site's download page links to is the one used here, so there is one artifact and one
+   * way to get it.
+   */
+  function openUpdateDownload(body) {
+    // The version answer carries the `api_base` it was checked against, and that is
+    // preferred over the cached settings: the two agree, but the body is *evidence* of
+    // which site was asked, while the cache is whatever the last load left behind — and
+    // this runs two and a half seconds after boot, when that load may still be in flight.
+    var base = ((body && body.api_base) || (settings && settings.api_base) || "").replace(/\/+$/, "");
+    if (!base) {
+      toast("还不知道官方站点地址，先去设置页填上", "warn", 8000);
+      return;
+    }
+    window.open(base + "/api/download/webui" + platformQuery(), "_blank", "noopener");
+  }
+
+  /**
+   * Ask the official site what the latest version is.
+   *
+   * Resolves with a body that always has `current` and `channel`; `remote` and `update`
+   * are `null` when the check could not be made, which is a third answer and not a
+   * failure — the settings page shows all three, and the startup notice shows none of
+   * them. See `version_endpoint` in http_server.rs.
+   */
+  function checkVersion() {
+    return apiJson("/api/version").then(function (result) {
+      return (result && result.body) || null;
+    }).catch(function () {
+      return null;
+    });
+  }
+
+  /**
+   * The startup notice: tell the user once per version, and never make them go looking.
+   *
+   * Called from `boot()` after the first render settles. It is deliberately quiet about
+   * every outcome except one — a newer version exists and the user has not been told about
+   * *this* version yet. "已是最新" is not news worth a modal, and a failed check is not the
+   * user's problem at startup; the settings page is where all three answers belong.
+   *
+   * Once per version rather than once per launch, because a notice that returns every
+   * morning is a notice people learn to dismiss without reading.
+   */
+  function announceUpdate() {
+    checkVersion().then(function (body) {
+      if (!body || body.update !== true || !body.remote) return;
+      if (updateSeen(body.remote)) return;
+
+      openDialog(
+        dialogCloseButton() +
+        dialogTitle("有新版本") +
+        "<p>官方站点上是 <strong>v" + escapeHtml(body.remote) + "</strong>，你正在用的是 <strong>v" +
+        escapeHtml(body.current) + "</strong>。</p>" +
+        '<p class="dlg-note">下载后替换掉现在的客户端就行，设置和联机记录都留在原处。</p>' +
+        dialogActions(
+          '<button type="button" class="btn btn--ghost" data-dialog-close>以后再说</button>' +
+          '<button type="button" class="btn btn--primary" id="update-download">' +
+          icon("download", "icon--sm") + "去下载新版本</button>"
+        ),
+        function (panel) {
+          var go = panel.querySelector("#update-download");
+          go.addEventListener("click", function () {
+            rememberUpdateSeen(body.remote);
+            openUpdateDownload(body);
+            closeDialog();
+          });
+          // Dismissing also counts as "told": the point of the notice is that the user
+          // should not have to go looking, not that they must act.
+          panel.querySelectorAll("[data-dialog-close]").forEach(function (button) {
+            button.addEventListener("click", function () { rememberUpdateSeen(body.remote); });
+          });
+        }
+      );
+    });
+  }
+
+  /* ----------------------------------------------------------- sponsorship */
+
+  /** Where the tip jar is. One place, because the dialog is not the only thing that may
+      ever want to point at it. */
+  var SUPPORT_URL = "https://ifdian.net/a/RedstoneOnline";
+
+  /**
+   * How often to say thank you: every tenth launch of the client.
+   *
+   * A round number the user can see for themselves ("第 10 次"), and one that cannot
+   * arrive twice in a week of heavy play the way a time-based interval would. It counts
+   * *launches*, not rooms: somebody who opens five rooms in one evening has played one
+   * evening, and the counter comes from the client (`/api/health`) rather than from
+   * `localStorage`, so it is not reset by clearing site data or doubled by a second
+   * browser.
+   */
+  var SUPPORT_EVERY = 10;
+
+  /** Once per run: opening a second room in the same launch must not ask again. */
+  var supportOffered = false;
+
+  /**
+   * Say thank you on the tenth launch — but only to somebody who just played.
+   *
+   * Called when the *room* dialog goes away, and that timing is the whole design. It is
+   * the one moment in the product where the user has demonstrably played with somebody:
+   * the address exists, it has been copied, and a friend is on the other end of it. Asking
+   * at startup would be asking a stranger, and asking on a launch where no room ever came
+   * up would be thanking somebody for a session that did not happen.
+   *
+   * The cost of getting this wrong is not symmetric, which is why it is this quiet: a
+   * missed tenth launch costs nothing, and an interruption that arrives while somebody is
+   * waiting for an address costs the thing the dialog is asking for.
+   */
+  function announceSupport() {
+    if (supportOffered) return false;
+
+    var launches = health && health.launches;
+    if (!launches) {
+      // Normally the boot health poll has answered long before a room can be opened. If it
+      // has not (a reload with a room already up), ask once rather than silently skipping
+      // the launch this feature exists for.
+      apiJson("/api/health").then(function (result) {
+        if (result && result.ok && result.body) offerSupport(result.body.launches);
+      });
+      return false;
+    }
+    return offerSupport(launches);
+  }
+
+  /** The modulo check and the dialog. Split out so the late health answer can reuse it. */
+  function offerSupport(launches) {
+    if (supportOffered || !launches || launches % SUPPORT_EVERY !== 0) return false;
+    supportOffered = true;
+
+    openDialog(
+      dialogCloseButton() +
+      dialogTitle("第 " + launches + " 次一起玩") +
+      "<p>这是你第 <strong>" + launches + "</strong> 次使用红石联机与朋友游玩啦。" +
+      "如果你觉得红石联机好用的话，可以去爱发电赞助我们哦，谢谢你的支持！</p>" +
+      // The address in full, not behind the button: a tip link nobody can read before
+      // clicking is a link people do not click.
+      '<p class="dlg-note">爱发电 · ' + escapeHtml(SUPPORT_URL) + "</p>" +
+      dialogActions(
+        '<button type="button" class="btn btn--ghost" data-dialog-close>下次一定</button>' +
+        '<button type="button" class="btn btn--primary" id="support-go">' +
+        icon("link", "icon--sm") + "去赞助</button>"
+      ),
+      function (panel) {
+        panel.querySelector("#support-go").addEventListener("click", function () {
+          // A tab rather than a navigation: this is a side quest, and the room the user
+          // just opened has to stay on screen behind it.
+          window.open(SUPPORT_URL, "_blank", "noopener");
+          closeDialog();
+        });
+      }
+    );
+    return true;
+  }
+
   /* -------------------------------------------------------------- settings */
 
   var settings = null;
@@ -732,9 +1506,15 @@
   /* Build an asset URL the browser has to resolve itself — a `<use href>`, an
      `<img src>`. It is just the path now: there is no session token to append, and
      the fragment splitting this used to do existed only so the token could go
-     *before* the `#`. */
+     *before* the `#`.
+
+     The leading slash is load-bearing rather than tidy. Routes can be more than one
+     segment deep (`/help/port`), and a relative `icons.svg#i-play` on that page resolves
+     against `/help/` — so every icon in the shell disappears at once, and an image in a
+     step-by-step guide arrives broken. This helper is the one place that knows how a shell
+     asset is addressed, which is why the slash belongs here and not at forty call sites. */
   function assetUrl(path) {
-    return path;
+    return path.charAt(0) === "/" ? path : "/" + path;
   }
 
   function icon(name, extraClass) {
@@ -929,33 +1709,19 @@
     show();
   }
 
-  /* ---------------------------------------------------------------- sidebar */
+  /* ----------------------------------------------------------------- chrome */
 
-  function sideSet(collapsed) {
-    if (!appEl) return;
-    appEl.dataset.side = collapsed ? "collapsed" : "expanded";
-    var toggle = document.getElementById("side-toggle");
-    if (toggle) {
-      toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
-      toggle.setAttribute("aria-label", collapsed ? "展开侧栏" : "收起侧栏");
-    }
-    try { window.localStorage.setItem(SIDE_KEY, collapsed ? "1" : "0"); } catch (err) { /* ignore */ }
-  }
-
-  function sideStart() {
-    var stored = null;
-    try { stored = window.localStorage.getItem(SIDE_KEY); } catch (err) { /* ignore */ }
-    // Narrow windows get the rail without being asked; the user's own choice wins
-    // on a wide one.
-    var narrow = window.matchMedia("(max-width: 860px)").matches;
-    sideSet(stored === null ? narrow : stored === "1");
-
-    var toggle = document.getElementById("side-toggle");
-    if (toggle) {
-      toggle.addEventListener("click", function () {
-        sideSet(appEl.dataset.side !== "collapsed");
-      });
-    }
+  /* The top bar itself is static markup: its destinations are real `href`s that the
+     router intercepts, so there is nothing to wire except Quit.
+     
+     This used to be `sideStart` and it used to own a collapsible sidebar — the
+     toggle, its `aria-expanded`/`aria-label` bookkeeping, and a `localStorage` key
+     remembering whether the rail was collapsed. The navigation moved to the top bar
+     and needs none of that: a four-item horizontal bar has no collapsed state to
+     remember. `hongshi.shell.side` is left in whatever store it was written to
+     rather than read; a stale preference for a control that no longer exists is not
+     worth a migration step. */
+  function wireChrome() {
     var quit = document.getElementById("action-quit");
     if (quit) {
       quit.addEventListener("click", function () {
@@ -977,20 +1743,17 @@
     if (booted) return;
     booted = true;
 
-    sideStart();
+    wireChrome();
     startRouter();
 
     var clear = document.getElementById("drawer-clear");
     if (clear) clear.addEventListener("click", termClear);
 
-    // The log panel's switch, in the top-right corner of the board. It is the panel's
-    // only close control — the header used to carry a second one a few pixels away,
-    // which read as one control that was broken rather than two that worked.
-    var logToggle = document.getElementById("log-toggle");
-    if (logToggle) {
-      logToggle.addEventListener("click", function () { drawerOpen(!drawerIsOpen()); });
-      logToggle.setAttribute("aria-expanded", drawerIsOpen() ? "true" : "false");
-    }
+    // There is no log switch in the top bar to wire any more. The panel is opened
+    // from the page that needs it (`Shell.drawerOpen(true)`, the 联机 page's 查看日志
+    // and 服务 card both do this) and closed with Escape, which `drawerOpen` installs
+    // a document-level listener for. The drawer's own `[hidden]` rule keeps it from
+    // painting on load, so nothing here has to put it in its initial state.
 
     checkHealth(false);
     window.setInterval(function () { checkHealth(false); }, PAGE_POLL_MS);
@@ -1010,6 +1773,26 @@
     // reason and offers the button.
     nodeStore.load(false).then(function (nodes) {
       if (nodes.length) nodeStore.probe(false);
+    });
+
+    /*
+     * The first run: the guide, or the update notice, and never both at once.
+     *
+     * They are queued rather than raced. The guide is about the product and the notice is
+     * about the build, so the guide goes first — a user who has never opened the client is
+     * not helped by being told there is a newer version of it. `openDialog` replaces
+     * whatever is on screen, so firing both would silently drop the first.
+     *
+     * Both wait for the kernel store, because "has this person run the client before" is
+     * answered by whether a kernel is installed, and that read is in flight at this point.
+     */
+    kernelStore.refresh().then(function () {
+      window.setTimeout(function () {
+        if (dialogIsOpen()) return;
+        announceGuide();
+        if (dialogIsOpen()) return;
+        announceUpdate();
+      }, UPDATE_CHECK_DELAY_MS);
     });
 
     document.addEventListener("visibilitychange", function () {
@@ -1064,7 +1847,19 @@
     // ui helpers
     toast: toast,
     icon: icon,
+    assetUrl: assetUrl,
     escapeHtml: escapeHtml,
+    openDialog: openDialog,
+    closeDialog: closeDialog,
+    dialogIsOpen: dialogIsOpen,
+    dialogTitle: dialogTitle,
+    dialogActions: dialogActions,
+    dialogCloseButton: dialogCloseButton,
+    checkVersion: checkVersion,
+    openUpdateDownload: openUpdateDownload,
+    announceUpdate: announceUpdate,
+    announceSupport: announceSupport,
+    showGuide: showGuide,
     copyText: copyText,
     relativeTime: relativeTime,
     duration: duration,

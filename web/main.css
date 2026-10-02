@@ -66,36 +66,106 @@
 :root {
   color-scheme: dark;
 
-  /* three heights of one board */
-  --ground: #313131;
-  --plate: #414141;
-  --rule: #525252;
+  /* ------------------------------------------------------ bright / saturated
+   *
+   * The board is **red**, and it is not the old grey palette tinted: the ground,
+   * the card, the rail and the terminal are all reds, which is a different problem
+   * from putting red on grey and it breaks two things the grey scheme relied on.
+   *
+   *   1. **Text can no longer retreat by opacity.** A white at 60% over a red
+   *      ground is not dimmer white, it is *pink* — the ground bleeds through the
+   *      text and every secondary label turns a colour nothing else in the palette
+   *      uses. The three tiers are therefore painted colours, picked so that each
+   *      step is a real step down in luminance over `--plate`:
+   *      #FDF1F3 12.1:1 · #F2C2C9 8.1:1 · #DA939D 5.9:1 · #A85C67 3.1:1.
+   *   2. **The fire palette is no longer an accent set.** A signal red on a red
+   *      ground is almost the same colour, so "this is lit" has nothing to say.
+   *      Anything that has to read as *active* — the current destination, the
+   *      focus ring, the top of the heat ramp, a primary button — now uses the
+   *      brightest step of the same family (`--signal`, a near-orange #FF5A33),
+   *      which separates from the ground by luminance rather than by hue. That is
+   *      what makes it bright and saturated instead of muddy.
+   */
+  --ground: #4a0a10;   /* the board: a deep, saturated oxblood */
+  --plate: #7e141c;   /* cards and controls, ~1.45× the ground's luminance */
+  --rule: #a8242d;   /* every border and divider */
 
-  /* the signal: graphics and button fills only, never text */
-  --red: #ca3e47;
+  /* text, four painted tiers — see the note above before making any of them
+     translucent again */
+  --fg: #fdf1f3;
+  --fg-soft: #f2c2c9;
+  --fg-dim: #da939d;
+  --edge: #e88a94;   /* hover borders: brighter than --rule, below --fg */
+  --fg-faint: #a85c67;   /* the fourth tier: labels on a card, disabled words */
 
-  /* text, one colour, retreating by opacity */
-  --fg: #ffffff;
-  --fg-soft: rgba(255, 255, 255, 0.60);
-  --fg-dim: rgba(255, 255, 255, 0.55);
-  --edge: rgba(255, 255, 255, 0.42);
+  /* A recessed surface *inside* a plate — one step below it, in the same family.
+     A translucent white would have been the obvious way to write this and it is
+     wrong here: white over red is pink, and a pink "pressed row" is a colour the
+     palette does not otherwise have. */
+  --wash: #5f0e15;
 
-  /* the terminal screen, from the demo */
-  --screen: #05070a;
-  --screen-surface: #0e141a;
-  --screen-line: #232e39;
-  --term-fg: #c2cedb;
-  --term-live: #5fd0c4;
-  --term-ident: #7aa2f7;
-  --term-literal: #e5b567;
-  --term-reach: #8fd694;
-  --term-fail: #f07178;
+  /* ------------------------------------------------------------- fire, five */
+  /* The palette is five reds and they are not interchangeable, so they are stored
+   * as roles rather than as five swatches to pick from. The old rule survives: a
+   * fire colour is never text on a surface — it is a fill, a border, an indicator
+   * or a graphic, and words are always one of the four tiers above. */
+  --signal: #ff5a33;   /* the one accent: active states, bars, focus ring     */
+  --signal-hot: #ff7452;   /* hover — lighter, because hover is "closer to you"   */
+  --signal-deep: #e01f2d;   /* pressed — deeper, because pressed is "away"         */
+  --signal-dim: #c02a33;   /* quiet fire: washes and the low heat steps           */
+  --signal-ink: #8b0000;   /* fire as a *ground*: its only job is to carry white  */
+  --on-signal: #ffffff;
 
-  /* latency, the four states the node list shows */
-  --ok: #8fd694;
-  --warn: #e5b567;
-  --high: #f07178;
-  --dead: #6c7379;
+  /* The wash over the window artwork. Translucent enough that the low-poly facets
+   * read through it as texture, heavy enough that `--fg-soft` prose holds over the
+   * lightest of them — see the note on `body` below for why this is one wash and not
+   * one per card. Tuned down from 0.62 after looking at it: at that weight the
+   * artwork was only visible as a red haze, which is the same as not having one. */
+  --scrim: rgba(46, 7, 12, 0.5);
+
+  /* Heat: the one ramp, and the only place these five run in order. The bottom
+   * step is a plate tint rather than a grey, because there is no grey any more. */
+  --heat-0: rgba(255, 255, 255, 0.07);
+  --heat-1: #c4666c;
+  --heat-2: #e01f2d;
+  --heat-3: #ff5a33;
+  --heat-4: #ffd166;
+  --heat-ring: #ffd166;
+
+  /* The calendar mark on 首页, and the same amber as the top of the heat ramp.
+   * It is the one deliberately non-red accent in the system: it sits on the board
+   * next to nothing else, and a red glyph on a red board at this size reads as a
+   * smudge rather than as an icon. */
+  --calendar: #ffd166;
+
+  /* The old name, kept because pages that predate this palette reference it. */
+  --red: var(--signal);
+
+  /* The terminal screen. It stays a screen — near-black behind a deep-red tint
+     rather than a red panel — because the log is a terminal and the one thing it
+     must not look like is a card. The four latency states are re-picked to sit on
+     red: the old mint/amber pair read as a different product next to a red board,
+     and #8FD694 on #9B1A24 vibrates. */
+  --screen: #2a0709;
+  --screen-surface: #3b0b0f;
+  --screen-line: #5e161c;
+  --term-fg: #f6d6da;
+  --term-live: #ff8a7a;
+  --term-ident: #ffc98a;
+  --term-literal: #ffd166;
+  --term-reach: #9be8a8;
+  --term-fail: #ff6b6b;
+
+  /* Liveness, the readings the 联机 page puts beside a relay. Green means the control
+     port answered, amber means it answered slowly or only to ICMP, and the red is
+     deliberately this bright: 「断联」is the one reading that has to be impossible to
+     mistake for decoration, and a dull red would sit too close to the board it is
+     drawn on to carry that. `--dead` is the fourth, for a node the list has no
+     measurement for at all. */
+  --ok: #6ee7a0;
+  --warn: #ffc857;
+  --high: #ff3b30;
+  --dead: #a85c67;
 
   /* Nunito for Latin and digits, Han Rounded for Chinese — both bundled, because the
      faces that ship with Windows are not round and a rounded Latin face paired with a
@@ -116,10 +186,8 @@
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas,
     "Liberation Mono", "Han Rounded", monospace;
 
-  --side-w: 232px;
-  --side-w-collapsed: 68px;
+  --topbar-h: 60px;
   --drawer-w: 420px;
-  --topbar-h: 56px;
 
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-rise: cubic-bezier(0.16, 1, 0.3, 1);
@@ -129,9 +197,35 @@
 
 html { -webkit-text-size-adjust: 100%; }
 
+/* The artwork on the window itself, not on a card.
+ *
+ * `web/asset/lowpoly.webp` is a 1920×1080 low-poly volcanic scene — already dark
+ * (mean luminance 46 of 255) and already in this palette's red, which is why it
+ * works as a board rather than as a picture: it reads as texture under the content
+ * instead of competing with it.
+ *
+ * The scrim is the part that matters. It is `--scrim`, a translucent wash of the
+ * ground, laid over the image so the darkest and lightest facets are pulled toward
+ * one value — the image alone has enough contrast left in it to break a paragraph of
+ * `--fg-soft`, and the scrim is what buys that back without flattening the artwork to
+ * a solid. Adding a *second* scrim per-card was the alternative and it is worse: the
+ * cards already carry `--plate`, and stacking two washes makes the board look dirty.
+ *
+ * `fixed` is deliberate: it costs nothing here (there are no inner scroll
+ * containers on the board, so the background is never composited mid-scroll) and it
+ * keeps the scene from sliding under the content on the long pages. */
 body {
   margin: 0;
-  background: var(--ground);
+  background-color: var(--ground);
+  background-image: linear-gradient(var(--scrim), var(--scrim)),
+    url("asset/lowpoly.webp");
+  /* A little above centre: the scene's interest (the ridge and the ridge-line of
+     cones) sits in the upper half, and `cover` on a window shorter than 1080px crops
+     symmetrically — centred, the top half of a 16:9 image is the half that goes. */
+  background-position: center 38%;
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
   color: var(--fg);
   font-family: var(--font-sans);
   font-size: 15px;
@@ -157,7 +251,7 @@ body {
   border: 3px solid var(--ground);
   border-radius: 999px;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.6); }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-soft); }
 
 h1, h2, h3 { font-weight: 400; letter-spacing: -0.01em; margin: 0; }
 
@@ -177,236 +271,202 @@ a { color: var(--fg); }
 .icon--sm { width: 16px; height: 16px; }
 .icon--lg { width: 24px; height: 24px; }
 
+/* The sprite itself, referenced once from index.html so the browser fetches it up
+   front rather than on the first page that draws an icon. It must paint nothing:
+   `display: none` on the host would stop the referenced symbols from being usable
+   in some engines, so it is laid out as a zero-size box instead and the icon inside
+   it is clipped away. */
+.sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
 /* -------------------------------------------------------------------- app */
 
+/* A column now, not a two-column grid with a sidebar in it: the destinations
+   moved to the top bar, and what is left is one bar above one board. The drawer
+   still reserves its width on the right through `padding-right`, so the grid that
+   used to hold the sidebar is gone rather than unused. */
 .app {
-  display: grid;
-  grid-template-columns: var(--side-w) minmax(0, 1fr);
-  min-height: 100vh;
-  transition: grid-template-columns 0.22s var(--ease);
-}
-
-.app[data-side="collapsed"] { grid-template-columns: var(--side-w-collapsed) minmax(0, 1fr); }
-
-/* ------------------------------------------------------------------ side */
-
-.side {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  background: var(--ground);
-  border-right: 1px solid var(--rule);
-  padding: 14px 12px 16px;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow: hidden;
-  /* Explicit instead of implied by the grid column: the collapsed rail has to be
-     able to override this, and a bare `.side` rule otherwise wins on specificity
-     against `.app[data-side="collapsed"] .side`. */
-  width: var(--side-w);
-  transition: width 0.22s var(--ease);
+  min-height: 100vh;
 }
 
-.side-head {
+/* ----------------------------------------------------------------- topbar */
+
+/* Translucent rather than `--ground`, so the window artwork runs behind the bar
+   instead of stopping at it — a solid bar over a full-bleed image reads as a strip
+   that failed to load. It still needs its own surface because the bar holds the
+   primary navigation: the wash is heavy enough that the words sit on a settled
+   value while the facets stay visible.
+   
+   Three columns — `auto 1fr auto` — so the destinations are centred on the *bar*
+   rather than parked next to the mark. `justify-content: center` on the nav does
+   not do this: the middle column absorbs the free space, and centring inside it
+   centres on whatever the mark and the account leave over, which shifts every time
+   either side changes width. The two outer columns are the same width by
+   construction here, so the middle one is the bar's actual centre. */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: 18px;
+  height: var(--topbar-h);
+  padding: 0 clamp(18px, 3.2vw, 40px);
+  background: color-mix(in srgb, var(--ground) 82%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--rule);
+}
+
+.topmark {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 40px;
-  padding: 0 4px;
+  min-width: 0;
+  text-decoration: none;
+  color: inherit;
+  flex: none;
 }
 
 .brand {
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
   flex: none;
   /* The 128px redstone block from the site's own artwork, downsampled — no
-     `image-rendering: pixelated`, which is for blowing a sprite up.
-     The reference used to be split in two: this plain URL as a fallback, behind a
-     `--icon-url` that app.js overwrote with a tokenized one. With no session token
-     there is nothing to overwrite it with, so there is one URL again. */
+     `image-rendering: pixelated`, which is for blowing a sprite up. */
   background-image: url("icon.png");
   background-position: center;
   background-repeat: no-repeat;
   background-size: contain;
 }
 
-.side-brand {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  line-height: 1.25;
-  white-space: nowrap;
-  transition: opacity 0.16s var(--ease);
-}
-
-.side-brand b { font-size: 14px; font-weight: 500; }
-.side-brand i {
-  font-style: normal;
-  font-size: 11.5px;
-  color: var(--fg-soft);
-  letter-spacing: 0.02em;
-}
-
-.side-toggle {
-  margin-left: auto;
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  color: var(--fg-soft);
-  cursor: pointer;
-  transition: background-color 0.18s var(--ease), color 0.18s var(--ease),
-    border-color 0.18s var(--ease);
-}
-
-.side-toggle:hover { background: var(--plate); color: var(--fg); border-color: var(--edge); }
-
-/* The log panel's switch, in the opposite corner and wearing the sidebar's shape, so
-   the two read as the same kind of control. It sits outside `.page` (the router
-   empties that element on every navigation) and outside the drawer (a control that
-   vanishes with the thing it opens is no use once the thing is open).
-
-   It does not move. It used to slide left by `--drawer-w` when the drawer opened, so
-   that it stayed in the *board's* corner — which meant the control you press to shut
-   the panel ran away from the corner you were looking at, and on a narrow window it
-   did not move at all, so the same button behaved two ways. It is pinned to the
-   window's top-right for both states now, and when the drawer is open it simply sits
-   on top of it; `.drawer-head` reserves the width instead. */
-.panel-toggle {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 35;
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  background: var(--ground);
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  color: var(--fg-soft);
-  cursor: pointer;
-  transition: background-color 0.18s var(--ease), color 0.18s var(--ease),
-    border-color 0.18s var(--ease);
-}
-
-.panel-toggle:hover { background: var(--plate); color: var(--fg); border-color: var(--edge); }
-
-/* Open, the switch is lit: the red is the design system's signal colour and this is a
-   state, not decoration. */
-.panel-toggle[aria-expanded="true"] { color: var(--red); border-color: var(--red); }
-
-.side-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 4px;
-}
-
-.nav-item {
+.topnav {
   display: flex;
   align-items: center;
-  gap: 12px;
-  height: 44px;
-  padding: 0 12px;
-  border-radius: 999px;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Current page: full-strength words plus the bar underneath. One state language,
+   two levels — full for current, dim for hover — the same as the site's nav. The
+   bar is a bottom border rather than a pseudo-element hanging off a pill, because in
+   a horizontal row the underline is what reads as "you are here"; a left bar was
+   right only while the list was vertical.
+
+   The items are words now, so the padding is the whole hit target and it is wider
+   than it was when a glyph did half the work of making the target look like one. */
+.nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 14.5px;
   color: var(--fg-soft);
   text-decoration: none;
   white-space: nowrap;
-  position: relative;
   transition: background-color 0.16s var(--ease), color 0.16s var(--ease);
 }
 
 .nav-item:hover { background: var(--plate); color: var(--fg); }
 
-/* Current page: white text plus the red bar. One state language, two levels —
-   full for current, half for hover — the same as the site's nav. */
 .nav-item[aria-current="page"] { color: var(--fg); }
 
-.nav-item[aria-current="page"]::before {
+.nav-item[aria-current="page"]::after {
   content: "";
   position: absolute;
-  left: 2px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 2px;
-  height: 20px;
-  border-radius: 1px;
-  background: var(--red);
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--signal);
 }
 
-.nav-item--soon { color: var(--fg-dim); }
-.nav-item--soon:hover { background: transparent; color: var(--fg-dim); }
+/* 一起玩 has no page yet. It keeps its place in the bar — a destination that
+   disappears until it ships is a destination nobody remembers — and reads as
+   dim rather than disabled-looking, because it is a real link to a page that
+   says 此功能暂不对外开放. */
+.nav-item[aria-disabled="true"] { color: var(--fg-faint); }
+.nav-item[aria-disabled="true"]:hover { background: transparent; color: var(--fg-dim); }
 
-.nav-text { font-size: 14px; }
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  flex: none;
+}
 
-.nav-badge {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--fg-dim);
+/* The account slot: an empty avatar, which is a state and not a placeholder. It
+   is a button so the bar's geometry and the focus order are already right when
+   the page behind it exists. */
+.account {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
   border: 1px solid var(--rule);
   border-radius: 999px;
-  padding: 0 7px;
-  line-height: 17px;
+  color: var(--fg-dim);
+  cursor: default;
+  transition: border-color 0.18s var(--ease), color 0.18s var(--ease);
 }
 
-.side-foot {
-  margin-top: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: stretch;
+.account:hover { border-color: var(--edge); color: var(--fg-soft); }
+
+.avatar {
+  width: 24px;
+  height: 24px;
+  display: block;
 }
 
-.side-quit {
+.avatar svg { width: 100%; height: 100%; display: block; }
+
+/* --------------------------------------------------------------- statusbar */
+
+/* The status pill and Quit used to live at the foot of the sidebar. With the
+   navigation gone there is nothing to hang them on left or right, so they get a
+   bar of their own under the board — which also gives the log drawer somewhere to
+   stop before the window edge. */
+.statusbar {
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 40px;
-  padding: 0 12px;
+  padding: 10px clamp(18px, 3.2vw, 40px) 14px;
+  margin-top: auto;
+}
+
+.statusbar-quit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 14px;
   background: transparent;
   border: 1px solid var(--rule);
   border-radius: 999px;
   color: var(--fg-soft);
   font: inherit;
-  font-size: 13.5px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
   transition: border-color 0.18s var(--ease), color 0.18s var(--ease);
 }
 
-.side-quit:hover { border-color: var(--edge); color: var(--fg); }
-.side-quit:disabled { color: var(--fg-dim); cursor: not-allowed; }
-
-/* ------------------------------------------------------------- collapsed */
-
-/* Narrow rail: icons only, labels gone, the toggle stays reachable. */
-.app[data-side="collapsed"] .side-brand,
-.app[data-side="collapsed"] .nav-text,
-.app[data-side="collapsed"] .nav-badge { display: none; }
-
-.app[data-side="collapsed"] .side {
-  width: var(--side-w-collapsed);
-  padding-left: 10px;
-  padding-right: 10px;
-}
-.app[data-side="collapsed"] .side-head { justify-content: center; }
-.app[data-side="collapsed"] .brand { display: none; }
-.app[data-side="collapsed"] .side-toggle { margin-left: 0; }
-.app[data-side="collapsed"] .nav-item { justify-content: center; padding: 0; }
-.app[data-side="collapsed"] .nav-item[aria-current="page"]::before {
-  left: -8px;
-  height: 24px;
-}
-.app[data-side="collapsed"] .side-quit { justify-content: center; padding: 0; }
-.app[data-side="collapsed"] .side-foot .pill { justify-content: center; }
-.app[data-side="collapsed"] .pill-text { display: none; }
+.statusbar-quit:hover { border-color: var(--edge); color: var(--fg); }
+.statusbar-quit:disabled { color: var(--fg-dim); cursor: not-allowed; }
 
 /* ------------------------------------------------------------------- main */
 
@@ -980,12 +1040,13 @@ a { color: var(--fg); }
 }
 
 @media (max-width: 860px) {
-  /* The rail is the only shape that fits: the sidebar keeps its icons and the
-     drawer becomes a full-width sheet over the board. */
-  .app,
-  .app[data-side="collapsed"] { grid-template-columns: var(--side-w-collapsed) minmax(0, 1fr); }
-
+  /* The bar is a mark, four two-character words and an avatar, and the grid keeps
+     the words centred at every width. The items only give up the padding that made
+     them comfortable rather than necessary, and the drawer becomes a full-width
+     sheet with `.app` no longer reserving room for it. */
   .app[data-drawer="open"] { padding-right: 0; }
+
+  .nav-item { padding: 0 10px; }
 
   .drawer { width: 100vw; border-left: none; }
 
