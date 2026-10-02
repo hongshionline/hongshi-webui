@@ -1388,20 +1388,27 @@
 
   var settings = null;
   /* Read-only facts the shell reports next to the settings: where the settings file
-     is, and which HTTP stack this build talks to the site with. Never written back. */
+     is, which HTTP stack this build talks to the site with, and — because it is the
+     shell that reads the file, not the page — whether the configured background is
+     still usable and what its modification time is. Never written back. */
   var settingsMeta = {};
 
   function adoptSettings(body) {
     if (!body) return;
-    // `/api/settings` answers `{settings: {...}, path: "...", http_backend: "..."}`.
-    // `settings` has to be the *inner* object, because every caller reads
-    // `S.settings.api_base`; the two envelope fields are kept aside for the one page
-    // that displays them. Storing the envelope itself — which is what this did —
-    // left every field undefined, so the service address sat on "读取中…" forever and
-    // the settings form opened blank.
+    // `/api/settings` answers `{settings: {...}, path: "...", http_backend: "...",
+    // "background": {...}}`. `settings` has to be the *inner* object, because every
+    // caller reads `S.settings.api_base`; the envelope fields are kept aside for the
+    // two places that display them — the 设置 page's 配置文件 row, and the background
+    // layer, which needs the file's mtime for its `?v=`. Storing the envelope itself —
+    // which is what this did — left every field undefined, so the service address sat
+    // on "读取中…" forever and the settings form opened blank.
     if (body.settings) {
       settings = body.settings;
-      settingsMeta = { path: body.path, http_backend: body.http_backend };
+      settingsMeta = {
+        path: body.path,
+        http_backend: body.http_backend,
+        background: body.background || {}
+      };
     } else {
       settings = body;
     }
@@ -1420,6 +1427,293 @@
       if (result.ok && result.body) adoptSettings(result.body);
       return result;
     });
+  }
+
+  /* ----------------------------------------------------------- background */
+
+  /*
+   * The picture behind the interface, when the user has supplied one.
+   *
+   * Three things are worth knowing before changing anything here.
+   *
+   * **The shell never copies the file.** `background_path` is a reference to where
+   * the user keeps their picture, and this is what turns "is it still there" into a
+   * picture on screen or a sentence in the settings page. One URL answers both:
+   * `/api/background` serves the bytes when it can and JSON saying why when it
+   * cannot, so the probe and the explanation cannot disagree.
+   *
+   * **The built-in background is not fetched through any of this.** It is an asset
+   * the stylesheet points at, painted by `body`, and an install that sets nothing
+   * never reaches this code at all. That is also the fallback: the custom picture is
+   * a layer *above* it, so a file that has been moved or deleted simply leaves the
+   * built-in one showing rather than leaving a hole.
+   *
+   * **Blur and crop are done here, not by the shell** — `filter` and
+   * `background-position` are the browser's job, and the crate has no image decoder
+   * by design. What the user sees is their own file, byte for byte.
+   */
+  var bgEl = document.getElementById("bg");
+  var SCRIM_FALLBACK = [46, 7, 12];
+  var FG_SOFT_FALLBACK = [242, 194, 201];
+  /* How readable the second text tier has to stay over the *worst* pixel of a
+     picture before the wash is called heavy enough. 7:1 rather than the 4.5:1 a
+     standard asks for, because this is prose over a photograph and the built-in
+     artwork sits at 7.3:1 — a slider that starts at the legal minimum looks fine on
+     the designer's monitor and thin everywhere else. */
+  var TARGET_CONTRAST = 7;
+
+  /* What the last attempt concluded. The settings page reads it to say
+     「正在使用内置背景」 or 「找不到这个文件」 without asking the shell again. */
+  var backgroundState = { state: "none", reason: "", url: "", width: 0, height: 0 };
+
+  function cssRgb(token, fallback) {
+    var raw = getComputedStyle(document.documentElement).getPropertyValue(token);
+    var parts = String(raw || "").trim().replace(/^#/, "");
+    if (/^[0-9a-f]{6}$/i.test(parts)) {
+      return [
+        parseInt(parts.slice(0, 2), 16),
+        parseInt(parts.slice(2, 4), 16),
+        parseInt(parts.slice(4, 6), 16)
+      ];
+    }
+    var list = String(raw || "").split(",").map(function (part) { return parseInt(part, 10); });
+    if (list.length === 3 && list.every(function (n) { return isFinite(n); })) return list;
+    return fallback;
+  }
+
+  function clamp(value, low, high) {
+    value = Number(value);
+    if (!isFinite(value)) return low;
+    return Math.max(low, Math.min(high, value));
+  }
+
+  /**
+   * The crop as four fractions of the picture, whatever the settings claim.
+   *
+   * The crop is the **one nested object** in the settings file, and it travels that
+   * way on the wire too: four numbers that only mean something together are four
+   * numbers that have to be written together, and a flat patch that carries three of
+   * them is a rectangle nobody asked for. Per-mille of the picture, so the same crop
+   * means the same part of a 4K wallpaper and of a 640×360 cut of it.
+   *
+   * A settings object with no crop at all is the whole picture, not the smallest
+   * legal one — which is what `clamp` would hand back for four absent keys.
+   */
+  function cropFraction(settings) {
+    var crop = settings && settings.background_crop;
+    if (!crop) return { x: 0, y: 0, w: 1, h: 1 };
+    var x = clamp(crop.x, 0, 1000) / 1000;
+    var y = clamp(crop.y, 0, 1000) / 1000;
+    var w = clamp(crop.w, 100, 1000) / 1000;
+    var h = clamp(crop.h, 100, 1000) / 1000;
+    return { x: Math.min(x, 1 - w), y: Math.min(y, 1 - h), w: w, h: h };
+  }
+
+  /**
+   * Where the picture is served from, or "" when the built-in one is the picture.
+   *
+   * The `?v=` is the file's own modification time, which the shell reports: it makes
+   * a replaced picture a different URL (so a re-pick of the same path is a fresh
+   * fetch) while leaving a reload on the same URL, where the `ETag` turns it into a
+   * 304 instead of re-sending twenty megabytes.
+   */
+  function backgroundUrl(settings) {
+    if (!settings || !settings.background_path) return "";
+    var meta = settingsMeta.background || {};
+    return "/api/background?v=" + (meta.modified_ms || 0);
+  }
+
+  function probeImage(url) {
+    return new Promise(function (resolve, reject) {
+      var image = new Image();
+      image.onload = function () {
+        resolve({ width: image.naturalWidth, height: image.naturalHeight });
+      };
+      image.onerror = function () { reject(new Error("decode")); };
+      image.src = url;
+    });
+  }
+
+  /**
+   * Map the crop rectangle onto the layer.
+   *
+   * The rule: scale the crop until it covers the box, then **centre what overflows**.
+   * Centring is what makes the whole-image crop identical to `cover` + `center`, so
+   * the default case is exactly what the built-in background does and a user who
+   * never opens the crop tool cannot tell this code exists. Without it, a 16:9
+   * photograph in a taller window would jump against the top-left corner the first
+   * time somebody touched the crop.
+   *
+   * The layer is bigger than the viewport when a blur is set (see `.bg`), and this
+   * measures the layer rather than the window for that reason.
+   */
+  function fitBackground(settings) {
+    if (!bgEl || backgroundState.state !== "ok") return;
+    var natural = { w: backgroundState.width, h: backgroundState.height };
+    if (!natural.w || !natural.h) return;
+
+    var box = bgEl.getBoundingClientRect();
+    if (!box.width || !box.height) return;
+
+    var crop = cropFraction(settings);
+    var scale = Math.max(box.width / (crop.w * natural.w), box.height / (crop.h * natural.h));
+    var width = natural.w * scale;
+    var height = natural.h * scale;
+    bgEl.style.backgroundSize = width + "px " + height + "px";
+    bgEl.style.backgroundPosition =
+      (-crop.x * width + (box.width - crop.w * width) / 2) + "px " +
+      (-crop.y * height + (box.height - crop.h * height) / 2) + "px";
+  }
+
+  function useBuiltInBackground(state, reason) {
+    backgroundState = { state: state || "none", reason: reason || "", url: "", width: 0, height: 0 };
+    if (!bgEl) return;
+    bgEl.dataset.on = "0";
+    bgEl.style.removeProperty("--bg-image");
+    bgEl.style.backgroundSize = "";
+    bgEl.style.backgroundPosition = "";
+  }
+
+  /**
+   * The two numbers that shape the wash, applied unconditionally.
+   *
+   * Unconditional on purpose: a user who moved the 背景变暗 slider and *then* deleted
+   * their picture keeps the weight they chose, over the artwork that is left. The
+   * alternative — resetting to the built-in 0.62 whenever the picture fails — would
+   * undo a deliberate choice because of an unrelated accident.
+   */
+  function applyWash(settings) {
+    var darkness = clamp(settings && settings.background_darkness, 0, 100);
+    var blur = clamp(settings && settings.background_blur, 0, 40);
+    document.documentElement.style.setProperty("--scrim-alpha", String(darkness / 100));
+    document.documentElement.style.setProperty("--bg-blur", blur + "px");
+  }
+
+  /**
+   * Everything except the picture itself: the wash, and the geometry.
+   *
+   * The settings page drags these continuously, and a full apply per pointer event
+   * would be an `Image()` per pointer event. The picture only changes when the *path*
+   * does, and a path needs a save before the shell will serve it — so the cheap half
+   * is what a drag gets.
+   */
+  function previewBackground(settings) {
+    applyWash(settings);
+    fitBackground(settings);
+  }
+
+  /**
+   * Put the configured background on screen, or leave the built-in one showing.
+   */
+  function applyBackground(settings) {
+    applyWash(settings);
+
+    var url = backgroundUrl(settings);
+    if (!url) {
+      useBuiltInBackground("none", "");
+      return Promise.resolve(backgroundState);
+    }
+    return probeImage(url).then(function (size) {
+      backgroundState = { state: "ok", reason: "", url: url, width: size.width, height: size.height };
+      if (bgEl) {
+        bgEl.style.setProperty("--bg-image", 'url("' + url + '")');
+        bgEl.dataset.on = "1";
+      }
+      fitBackground(settings);
+      return backgroundState;
+    }, function () {
+      // The shell said the file was fine and the browser still could not draw it —
+      // a format this browser does not decode, or a file that changed in between.
+      // Which of the two sentences to show is decided by what the shell reported.
+      var meta = settingsMeta.background || {};
+      var reason = meta.state && meta.state !== "ok"
+        ? (meta.reason || "")
+        : "浏览器打不开这张图片，可能是格式不支持或者文件损坏了";
+      useBuiltInBackground(meta.state || "undecodable", reason);
+      return backgroundState;
+    });
+  }
+
+  /* --- the wash, measured rather than guessed ------------------------------- */
+
+  function srgbToLinear(channel) {
+    var value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+  }
+
+  function relativeLuminance(rgb) {
+    return 0.2126 * srgbToLinear(rgb[0]) + 0.7152 * srgbToLinear(rgb[1]) + 0.0722 * srgbToLinear(rgb[2]);
+  }
+
+  function contrastRatio(a, b) {
+    var la = relativeLuminance(a);
+    var lb = relativeLuminance(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  }
+
+  /**
+   * What 背景变暗 should start at for a picture nobody has looked at yet.
+   *
+   * Measured, because the honest alternative is a guess that is wrong in both
+   * directions: a dark wallpaper needs almost no wash, a white one needs most of it,
+   * and the *average* brightness of a picture decides nothing — a mostly black image
+   * with one white corner averages dark and is unreadable where it matters.
+   *
+   * So this composites the wash over the 97th-percentile brightest pixel and reports
+   * the lightest wash that keeps the interface's second text tier at
+   * [`TARGET_CONTRAST`] over it. `null` when the browser will not hand the pixels
+   * over (a canvas the page cannot read), in which case the slider stays where the
+   * user left it rather than jumping somewhere invented.
+   */
+  function suggestDarkness(url) {
+    return new Promise(function (resolve) {
+      var image = new Image();
+      image.onload = function () {
+        try {
+          var canvas = document.createElement("canvas");
+          canvas.width = 96;
+          canvas.height = 54;
+          var context = canvas.getContext("2d");
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          var pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+
+          var samples = [];
+          for (var i = 0; i < pixels.length; i += 4) {
+            var rgb = [pixels[i], pixels[i + 1], pixels[i + 2]];
+            samples.push({ rgb: rgb, lum: relativeLuminance(rgb) });
+          }
+          samples.sort(function (a, b) { return a.lum - b.lum; });
+          var worst = samples[Math.min(samples.length - 1, Math.floor(samples.length * 0.97))];
+
+          var scrim = cssRgb("--scrim-rgb", SCRIM_FALLBACK);
+          var text = cssRgb("--fg-soft", FG_SOFT_FALLBACK);
+          for (var step = 0; step <= 48; step++) {
+            var alpha = step * 0.02;
+            var mixed = [
+              worst.rgb[0] * (1 - alpha) + scrim[0] * alpha,
+              worst.rgb[1] * (1 - alpha) + scrim[1] * alpha,
+              worst.rgb[2] * (1 - alpha) + scrim[2] * alpha
+            ];
+            if (contrastRatio(text, mixed) >= TARGET_CONTRAST) {
+              // Rounded to fives: a slider that lands on 63 is claiming a precision
+              // this measurement does not have.
+              return resolve(Math.round((alpha * 100) / 5) * 5);
+            }
+          }
+          resolve(95);
+        } catch (err) {
+          resolve(null);
+        }
+      };
+      image.onerror = function () { resolve(null); };
+      image.src = url;
+    });
+  }
+
+  /* The layer's geometry is a function of the window, and the window changes. One
+     listener for the life of the tab, registered at boot rather than per page. */
+  function onBackgroundResize() {
+    if (backgroundState.state === "ok" && settings) fitBackground(settings);
   }
 
   /* ------------------------------------------------------------- formatting */
@@ -1757,7 +2051,22 @@
 
     checkHealth(false);
     window.setInterval(function () { checkHealth(false); }, PAGE_POLL_MS);
-    loadSettings(false);
+
+    /*
+     * The window's own artwork, before anything else draws into it.
+     *
+     * It reads the settings first because the picture's *location* is in them, and
+     * the same read is what every page needs — `loadSettings` caches, so the 设置
+     * page's own call is the same request. A failure leaves the built-in background
+     * showing, which is the state that needs no code.
+     *
+     * The resize listener is registered once here and lives for the life of the tab:
+     * the crop is a function of the window's shape, so a maximised window has to
+     * re-fit, and re-fitting is two numbers of arithmetic.
+     */
+    loadSettings(false).then(function (loaded) { applyBackground(loaded); });
+    window.addEventListener("resize", onBackgroundResize);
+
     tunnelStore.refresh();
 
     // Whether a kernel is installed is a fact every page needs as soon as it draws, so
@@ -1829,8 +2138,15 @@
     // settings
     loadSettings: loadSettings,
     saveSettings: saveSettings,
+    applyBackground: applyBackground,
+    previewBackground: previewBackground,
+    fitBackground: fitBackground,
+    suggestDarkness: suggestDarkness,
+    backgroundUrl: backgroundUrl,
+    cropFraction: cropFraction,
     get settings() { return settings; },
     get settingsMeta() { return settingsMeta; },
+    get background() { return backgroundState; },
     // log
     termWrite: termWrite,
     termClear: termClear,

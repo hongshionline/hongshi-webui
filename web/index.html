@@ -21,6 +21,12 @@
 </head>
 <body>
 
+<!-- The window's artwork, when the user has supplied one. It carries the *custom*
+     picture only; the built-in WebP stays on `body`'s own background, which is what
+     shows before this element is switched on and what keeps showing if the file the
+     user pointed at is gone. See `.bg` in main.css and `applyBackground` in app.js. -->
+<div class="bg" id="bg" aria-hidden="true"></div>
+
 <!-- The sprite, referenced once so the browser fetches it. Every icon in the app is
      a `<use href="/icons.svg#i-…">`, and this used to be pulled in as a side effect of
      the nav items carrying icons — which they no longer do. Without this the browser

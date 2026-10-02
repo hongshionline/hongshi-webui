@@ -362,10 +362,56 @@ The running build is **测试版 v0.5.0**. The channel is one constant (`crate::
 `--version`, the About panel and the site's endpoint are three places a user can compare, and two of
 them disagreeing is worse than either being wrong.
 
+### 个性化: the user's own picture behind the interface
+
+设置 ends with a section that puts an image of the user's own behind the board: a path, a Gaussian
+blur, a wash weight, and a crop rectangle. Four things about it are decisions rather than
+implementation.
+
+**The file is not copied.** `background_path` is a *reference*: the shell reads the picture where the
+user keeps it, on every request, and the moment it stops resolving the interface falls back to the
+built-in WebP. Copying it into the client's folder would survive the user moving their wallpaper — and
+would also mean a second copy of a 20 MB picture on disk, a second copy to keep in step, and a client
+directory that grows every time somebody tries a background they do not keep. A path plus a *visible*
+fallback is the behaviour that is easy to explain, and the fallback is not a mode: the custom picture
+is a layer **above** the one `body` already paints, so a file that has been deleted simply leaves the
+built-in background showing. The setting is not thrown away when that happens — put the file back and
+the picture returns, crop and all.
+
+**A browser will not tell a page where a dropped file lives.** `File` carries a name, a size and a
+timestamp and no path at all; that is a security boundary, not an oversight. So "upload" here could
+only ever have meant copying the picture somewhere. The drop zone and 浏览… are **hints**: they fill
+the file name into the path field, and the sentence under the field says the directory has to be
+filled in by hand. What the drag *can* do honestly is the two checks a `File` answers — its size, and
+whether it is a GIF — and both of those are said immediately rather than after a round trip.
+
+**Blur and crop are the browser's job.** `filter: blur()` on a layer that is inset by twice the blur
+radius, so the blurred edge falls outside the viewport instead of drawing a soft line along it, and a
+`background-position`/`-size` computed from the crop rectangle against the picture's natural size. The
+crate has no image decoder by design, so the bytes the browser receives are the user's own file, byte
+for byte — which is also why the 20 MB cap is enforced in the shell and why the response's
+`Content-Length` is the file's own size. A reload revalidates with an `ETag` rather than sending
+twenty megabytes again.
+
+**The wash weight is measured, not chosen.** How heavy `--scrim` has to be is a property of the
+picture: the built-in artwork was measured at 0.62, and a user's photograph has no such number. So the
+page composites the wash over the 97th-percentile brightest pixel of the new picture and picks the
+lightest weight that keeps `--fg-soft` at 7:1 over it — **85%** for a white image, **60%** for a
+mid-grey one, **0%** for a black one. The slider is what that number *sets*, so the user can disagree
+with the measurement; it just does not start at the legal minimum, which looks fine on the designer's
+monitor and thin everywhere else.
+
+Refusals name which one they are: 找不到这个文件 / 这是一个文件夹 / 不支持 GIF：会动的图片不能做背景 /
+这看起来不是图片文件，支持 JPG、PNG、WebP、BMP 或 AVIF / 这是一个相对路径。 The format comes from the
+file's **first bytes** rather than its extension, so a `.jpg` that is really an animated GIF is refused
+for what it is, and a refused path is never stored — the shell judges it while the person who typed it
+is still looking at the field.
+
 ## Status: phase 2 — the kernel is wired up
 
 Working now: the whole interface, the local server, the site proxy, the node
-list, the latency probe, settings persistence, quit — and **the tunnel itself**. The client finds
+list, the latency probe, settings persistence, quit, **a background of the user's own** — and **the
+tunnel itself**. The client finds
 `hongshic`, spawns it, streams its stdout into the log panel, reads `endpoint=` off that stdout and
 puts the address on the card. `POST /api/tunnel/start|stop` drive it; `GET /api/kernel` reports what
 it is doing.
@@ -730,6 +776,16 @@ is why the shell proxies, and why the CSP stays at `connect-src 'self'`.
 Deliberately not defended against, because the threat model is loopback and the operator chose it:
 a symlink inside the web root is followed, and another program on the machine can drive the API.
 
+**One surface arrived with the personalized background, and it is worth naming.** `GET /api/background`
+reads a file from this machine and serves it to whoever asked. What keeps that from being "read any
+file over HTTP" is that the path is **never taken from the request**: there is exactly one background,
+it is the one in the settings file, and the bytes are only sent if they begin with a still-image
+signature (JPEG, PNG, WebP, BMP, AVIF) and are under 20 MB. Everything else is a JSON refusal with a
+state in it. A local program can still set that path and read back any *image* on the disk through it
+— that is the same accepted same-machine threat as the rest of the API, and it is what "do not copy
+the user's picture" costs. The page cannot do it: `img-src 'self'` is where the picture is allowed to
+come from, and a page on another origin is refused before any of this is reached.
+
 ## Layout
 
 ```
@@ -742,6 +798,7 @@ src/
   http_server.rs      HTTP/1.1 over std::net: parsing, routing, the origin checks, shutdown
   kernel.rs           the hongshic child process: spawn, stdout pump, endpoint, exit state
   assets.rs           embedded assets, the on-disk override, path validation, Range parsing
+  background.rs       the user's own background: where it is, whether it is still there, what it is
   site.rs             the site: node list + cache, the latency probe; the Mojang news reader
   net.rs              WinHTTP over FFI (Windows) or plain TCP elsewhere — no TLS dependency
   config.rs           settings file: parse, clamp, save
@@ -1042,3 +1099,19 @@ a `querySelector` cheerfully confirms is fine. Step 2 places above, and step 4 p
 page for the same class of reason at the other end of the window: there is no room under 开启房间, and
 "above" lands on the two controls that step's own sentence names — the button itself, and the
 自动下载内核 button it tells the user to press first.
+
+**A patch that is applied is not a patch that was understood.** The crop travels as one nested object
+(`"background_crop": {"x":…,"y":…,"w":…,"h":…}`), because four numbers that only mean something
+together are four numbers that must be written together. The settings page's first version sent four
+*flat* keys — `background_crop_x`, `_y`, `_w`, `_h` — and the shell read the object, found nothing, and
+kept what it had. Nothing errored. The rest of the patch applied, the page reported 已保存, and the
+stored crop was the default `0,0,1000,1000`.
+
+What makes it worth writing down is that it *looked* right from both ends, and only for the reason it
+was wrong: a default crop is the whole picture, so the settings page's readout said the right size for
+the wrong reason, the background painted correctly, and the file on disk held a plausible rectangle.
+It survived a save, a reload, and a screenshot. It came apart the moment a crop was dragged — the box
+moved, the preview followed, and the saved value stayed `0,0,1000,1000`, so the picture behind the page
+never changed while the rectangle said it had. Two ends of one format with no test between them; the
+checks that now hold it compare the *shape* in both files (`background_crop: {` in `pages.js`,
+`settings.background_crop` in `app.js`) and the round trip over a real socket.

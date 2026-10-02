@@ -6,10 +6,16 @@
 //! travels with the folder it was unzipped into is easier to explain than one
 //! hidden in `%APPDATA%`.
 //!
-//! There is no JSON dependency: the file is five flat values, and the shape is
-//! fixed by [`Settings`]. Parsing is done by hand and every field falls back to
+//! There is no JSON dependency: the file is a handful of flat values, and the shape
+//! is fixed by [`Settings`]. Parsing is done by hand and every field falls back to
 //! its default rather than failing, because a settings file is not worth refusing
 //! to start over.
+//!
+//! The background block is flat for the same reason, and its four crop numbers are
+//! **per-mille of the image** rather than pixels: the same setting then means the
+//! same picture on a 4K wallpaper and a 640×360 one, and it survives the image being
+//! replaced by a differently sized copy of itself. See [`crate::background`] for the
+//! file those numbers point at.
 
 use std::path::PathBuf;
 
@@ -27,6 +33,25 @@ pub struct Settings {
     pub node_cache_seconds: u64,
     /// Local game port the form starts with.
     pub default_game_port: u16,
+
+    /// Absolute path to the user's own background image, or empty for the one built
+    /// into the binary. **The file is never copied**: it is read where the user keeps
+    /// it, and a path that stops resolving falls back to the built-in background
+    /// rather than being repaired. See [`crate::background`].
+    pub background_path: String,
+    /// Gaussian blur radius over that image, in CSS pixels.
+    pub background_blur: u16,
+    /// How heavy the wash over the image is, as a percentage — the scrim that keeps
+    /// the interface's text legible over somebody else's picture. The default is the
+    /// weight the built-in artwork was measured at, so a user who sets nothing sees
+    /// exactly what they saw before.
+    pub background_darkness: u16,
+    /// The crop, in per-mille of the image's own width and height. `0,0,1000,1000` is
+    /// the whole image; the page maps it onto `background-position`/`-size`.
+    pub background_crop_x: u16,
+    pub background_crop_y: u16,
+    pub background_crop_w: u16,
+    pub background_crop_h: u16,
 }
 
 impl Default for Settings {
@@ -37,47 +62,75 @@ impl Default for Settings {
             use_system_proxy: true,
             node_cache_seconds: 300,
             default_game_port: 25565,
+            background_path: String::new(),
+            background_blur: 0,
+            // 0.62 in the stylesheet's `--scrim`, which is the same number for the
+            // same reason: measured, not chosen. Keeping the two in step is what makes
+            // "no custom background" and "custom background with defaults" one picture.
+            background_darkness: 62,
+            background_crop_x: 0,
+            background_crop_y: 0,
+            background_crop_w: 1000,
+            background_crop_h: 1000,
         }
     }
 }
 
+/// Keep a crop inside the image and large enough to be worth rendering.
+///
+/// Exposed for the tests and for `apply_json`, which is the only place a crop can
+/// arrive from outside: the page sends what the user dragged, which can be a
+/// rectangle hanging off the edge or one collapsed to a line by a fast drag.
+pub fn clamp_crop(x: u16, y: u16, w: u16, h: u16) -> (u16, u16, u16, u16) {
+    /// One per-mille of a 1920px image is about two pixels, so this is the smallest
+    /// crop that can still be dragged deliberately: a tenth of the picture.
+    const MIN: u16 = 100;
+    const FULL: u16 = 1000;
+    let w = w.clamp(MIN, FULL);
+    let h = h.clamp(MIN, FULL);
+    (x.min(FULL - w), y.min(FULL - h), w, h)
+}
+
 impl Settings {
     /// Parse, filling in defaults for anything missing or unusable.
+    ///
+    /// A settings file with one key is a settings file, not a reason to fall back to
+    /// the defaults wholesale — which is `apply_json`'s rule, so this is the defaults
+    /// with that applied to them. It used to be a second copy of the same field list,
+    /// and the copy is where a new field goes missing.
     pub fn from_json(text: &str) -> Settings {
         let mut settings = Settings::default();
-        // Every field is optional: a settings file with one key is a settings
-        // file, not a reason to fall back to the defaults wholesale.
-        if let Some(api_base) = json_string(text, "api_base") {
-            let normalized = normalize_base_url(&api_base);
-            if !normalized.is_empty() {
-                settings.api_base = normalized;
-            }
-        }
-        if let Some(proxy) = json_string(text, "proxy") {
-            settings.proxy = proxy;
-        }
-        if let Some(flag) = json_bool(text, "use_system_proxy") {
-            settings.use_system_proxy = flag;
-        }
-        if let Some(seconds) = json_number(text, "node_cache_seconds") {
-            settings.node_cache_seconds = seconds.clamp(30, 86_400);
-        }
-        if let Some(port) = json_number(text, "default_game_port") {
-            if (1..=65535).contains(&port) {
-                settings.default_game_port = port as u16;
-            }
-        }
+        settings.apply_json(text);
         settings
     }
 
     pub fn to_json(&self) -> String {
         format!(
-            "{{\n  \"api_base\": \"{}\",\n  \"proxy\": \"{}\",\n  \"use_system_proxy\": {},\n  \"node_cache_seconds\": {},\n  \"default_game_port\": {}\n}}\n",
+            concat!(
+                "{{\n",
+                "  \"api_base\": \"{}\",\n",
+                "  \"proxy\": \"{}\",\n",
+                "  \"use_system_proxy\": {},\n",
+                "  \"node_cache_seconds\": {},\n",
+                "  \"default_game_port\": {},\n",
+                "  \"background_path\": \"{}\",\n",
+                "  \"background_blur\": {},\n",
+                "  \"background_darkness\": {},\n",
+                "  \"background_crop\": {{ \"x\": {}, \"y\": {}, \"w\": {}, \"h\": {} }}\n",
+                "}}\n"
+            ),
             escape_json(&self.api_base),
             escape_json(&self.proxy),
             self.use_system_proxy,
             self.node_cache_seconds,
             self.default_game_port,
+            escape_json(&self.background_path),
+            self.background_blur,
+            self.background_darkness,
+            self.background_crop_x,
+            self.background_crop_y,
+            self.background_crop_w,
+            self.background_crop_h,
         )
     }
 
@@ -103,6 +156,41 @@ impl Settings {
         if let Some(port) = json_number(text, "default_game_port") {
             if (1..=65535).contains(&port) {
                 self.default_game_port = port as u16;
+            }
+        }
+        // The background path is stored exactly as given and judged by
+        // `crate::background`: this module does no file access, so "does it exist"
+        // is not a question it can answer, and a path that worked at save time may
+        // stop working at any moment anyway.
+        if let Some(path) = json_string(text, "background_path") {
+            self.background_path = path.trim().to_string();
+        }
+        if let Some(blur) = json_number(text, "background_blur") {
+            self.background_blur = blur.min(40) as u16;
+        }
+        if let Some(darkness) = json_number(text, "background_darkness") {
+            self.background_darkness = darkness.min(100) as u16;
+        }
+        // The crop is the one nested object in this file, and it is read as a slice
+        // of it rather than by looking for `"x"` in the whole document: a one-letter
+        // key found anywhere is a key found in the user's file path one day.
+        if let Some(crop) = json_object(text, "background_crop") {
+            if let (Some(x), Some(y), Some(w), Some(h)) = (
+                json_number(&crop, "x"),
+                json_number(&crop, "y"),
+                json_number(&crop, "w"),
+                json_number(&crop, "h"),
+            ) {
+                let (x, y, w, h) = clamp_crop(
+                    x.min(1000) as u16,
+                    y.min(1000) as u16,
+                    w.min(1000) as u16,
+                    h.min(1000) as u16,
+                );
+                self.background_crop_x = x;
+                self.background_crop_y = y;
+                self.background_crop_w = w;
+                self.background_crop_h = h;
             }
         }
     }
@@ -288,6 +376,29 @@ fn find_value(text: &str, key: &str) -> Option<usize> {
     None
 }
 
+/// The body of a nested object, for the one field that is not flat.
+///
+/// Returns the text between its braces, so the numbers inside it are read against
+/// that slice and not against the whole file.
+fn json_object(text: &str, key: &str) -> Option<String> {
+    let start = find_value(text, key)?;
+    let rest = text[start..].strip_prefix('{')?;
+    let mut depth = 1usize;
+    for (offset, ch) in rest.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(rest[..offset].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn escape_json(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -323,9 +434,84 @@ mod tests {
             use_system_proxy: false,
             node_cache_seconds: 900,
             default_game_port: 30000,
+            background_path: r"C:\Users\me\Pictures\我的壁纸.png".to_string(),
+            background_blur: 12,
+            background_darkness: 80,
+            background_crop_x: 120,
+            background_crop_y: 0,
+            background_crop_w: 600,
+            background_crop_h: 800,
         };
         let text = settings.to_json();
         assert_eq!(Settings::from_json(&text), settings);
+    }
+
+    #[test]
+    fn a_background_that_was_never_set_is_the_built_in_one() {
+        let settings = Settings::default();
+        assert_eq!(settings.background_path, "", "empty means the built-in artwork");
+        assert_eq!(settings.background_blur, 0);
+        assert_eq!(
+            settings.background_darkness, 62,
+            "the weight the built-in artwork was measured at, so the two are one picture"
+        );
+        assert_eq!(
+            (
+                settings.background_crop_x,
+                settings.background_crop_y,
+                settings.background_crop_w,
+                settings.background_crop_h
+            ),
+            (0, 0, 1000, 1000),
+            "the whole image"
+        );
+    }
+
+    #[test]
+    fn a_crop_is_kept_inside_the_image_and_off_the_floor() {
+        // A drag that ran off the edge, and one that collapsed to a line.
+        assert_eq!(clamp_crop(900, 0, 400, 1000), (600, 0, 400, 1000));
+        assert_eq!(clamp_crop(0, 950, 1000, 400), (0, 600, 1000, 400));
+        assert_eq!(clamp_crop(0, 0, 0, 0), (0, 0, 100, 100));
+        assert_eq!(clamp_crop(0, 0, 5000, 5000), (0, 0, 1000, 1000));
+    }
+
+    #[test]
+    fn the_crop_reads_from_inside_its_own_object() {
+        // `"x"` is a one-letter key. Looking for it in the whole document is how a
+        // file path with an odd byte in it would one day become a crop.
+        let settings = Settings::from_json(
+            r#"{"background_path":"C:\\games\\x\\w.png","background_crop":{"x":250,"y":0,"w":500,"h":500}}"#,
+        );
+        assert_eq!(settings.background_path, r"C:\games\x\w.png");
+        assert_eq!(settings.background_crop_x, 250);
+        assert_eq!(settings.background_crop_w, 500);
+
+        // No object at all keeps whatever was there rather than resetting it.
+        let mut settings = Settings::default();
+        settings.apply_json(r#"{"background_blur":8}"#);
+        assert_eq!(settings.background_crop_w, 1000);
+        assert_eq!(settings.background_blur, 8);
+    }
+
+    #[test]
+    fn nonsense_background_values_are_clamped() {
+        let settings = Settings::from_json(
+            r#"{"background_blur":9999,"background_darkness":900,"background_crop":{"x":0,"y":0,"w":1,"h":1}}"#,
+        );
+        assert_eq!(settings.background_blur, 40);
+        assert_eq!(settings.background_darkness, 100);
+        assert_eq!((settings.background_crop_w, settings.background_crop_h), (100, 100));
+    }
+
+    #[test]
+    fn a_path_is_stored_as_typed_but_trimmed() {
+        // Nothing here judges the path: whether it points at a real image is
+        // `crate::background`'s question, and it is asked again on every request
+        // because the answer can change while the client is running.
+        let mut settings = Settings::default();
+        settings.apply_json(r#"{"background_path":"  C:\\bg.jpg  "}"#);
+        assert_eq!(settings.background_path, r"C:\bg.jpg");
     }
 
     #[test]

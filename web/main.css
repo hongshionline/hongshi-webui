@@ -116,22 +116,28 @@
   --signal-ink: #8b0000;   /* fire as a *ground*: its only job is to carry white  */
   --on-signal: #ffffff;
 
-  /* The wash over the window artwork. Translucent enough that the low-poly facets
-   * read through it as texture, heavy enough that `--fg-soft` prose holds over the
-   * lightest of them — see the note on `body` below for why this is one wash and not
-   * one per card.
+  /* The wash over the window artwork, in two halves because the interface is
+   * allowed to move one of them: **设置 → 个性化 → 背景变暗** writes
+   * `--scrim-alpha`, and the colour stays the palette's. Splitting it is what lets a
+   * user brighten their own photograph without also choosing a hue for this
+   * interface — the one thing a colour picker here would get wrong for everybody.
    *
    * The weight follows the artwork rather than a taste, and it is also what gives a
    * *neutral* cut a place in this palette: the field has no hue of its own, so the
-   * oxblood wash is what turns it into the board. The two cuts differ by a factor of
-   * two in brightness — the red scene ran 27–48 of 255 (mean 38) and took 0.5; the
-   * neutral one runs 28–122 (mean 77). At 0.5 over the neutral cut its lightest
-   * facets came out brighter than `--plate`, which is the elevation backwards, so it
-   * is 0.62. Measured over that cut, worst case: `--fg` 10.4:1 · `--fg-soft` 7.3:1 ·
-   * `--fg-dim` 4.7:1, with the lightest facet still under the cards. Any background
-   * the *user* supplies has to be measured against this too — see the personalization
-   * note in the README. */
-  --scrim: rgba(46, 7, 12, 0.62);
+   * oxblood wash is what turns it into the board. The two built-in cuts differ by a
+   * factor of two in brightness — the red scene ran 27–48 of 255 (mean 38) and took
+   * 0.5; the neutral one runs 28–122 (mean 77). At 0.5 over the neutral cut its
+   * lightest facets came out brighter than `--plate`, which is the elevation
+   * backwards, so it is 0.62. Measured over that cut, worst case: `--fg` 10.4:1 ·
+   * `--fg-soft` 7.3:1 · `--fg-dim` 4.7:1, with the lightest facet still under the
+   * cards.
+   *
+   * A picture the *user* supplies has no such number, which is why the slider exists
+   * and why the page measures a new one and moves the slider to what it measured —
+   * see `suggestDarkness` in app.js. */
+  --scrim-rgb: 46, 7, 12;
+  --scrim-alpha: 0.62;
+  --scrim: rgba(var(--scrim-rgb), var(--scrim-alpha));
 
   /* Heat: the one ramp, and the only place these five run in order. The bottom
    * step is a plate tint rather than a grey, because there is no grey any more. */
@@ -249,6 +255,51 @@ body {
 }
 
 ::selection { background: var(--red); color: var(--fg); }
+
+/* The window's artwork, as an element rather than as `body`'s background.
+ *
+ * It used to be `body { background-image: … }` alone, and that is still where the
+ * built-in WebP lives — so an install with no custom background paints exactly what
+ * it always painted. What needs an element is the user's own picture, because two of
+ * the three controls are `filter` and geometry: a Gaussian blur has to be applied to
+ * the picture by itself (`filter` on `body` would blur the whole interface with it),
+ * and a crop is a `background-position`/`-size` computed against a box, so there has
+ * to be a box the page owns.
+ *
+ * `inset` is negative by twice the blur so that the blurred edge falls outside the
+ * viewport. A Gaussian samples past the element's own bounds, and an element that
+ * stops at the screen edge leaves a soft but perfectly visible line along it.
+ *
+ * `aria-hidden`, `pointer-events: none`, `z-index: -1`: decoration, never in the way
+ * of a click, never in the way of a screen reader.
+ *
+ * It paints nothing until `app.js` has a picture that actually loaded (`data-on`), and
+ * that is the fallback rather than a state: if the user's file is gone, the built-in
+ * background underneath simply keeps showing. */
+.bg {
+  position: fixed;
+  inset: calc(var(--bg-blur, 0px) * -2);
+  z-index: -1;
+  pointer-events: none;
+  background-color: transparent;
+  background-image: var(--bg-image, none);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  filter: blur(var(--bg-blur, 0px));
+  opacity: 0;
+}
+.bg[data-on="1"] { opacity: 1; }
+
+/* The same wash `body` carries, over the user's picture. Inside the blurred element
+   on purpose: a flat colour does not care, and one element is one thing to reason
+   about when the picture is not there. */
+.bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+}
 
 :focus-visible {
   outline: 2px solid var(--fg);

@@ -51,6 +51,11 @@ const ALLOWED = new Set([
   "WeakMap", "WeakSet", "Intl", "encodeURIComponent", "decodeURIComponent",
   "encodeURI", "decodeURI", "parseInt", "parseFloat", "isNaN", "isFinite",
   "alert", "confirm", "prompt", "crypto", "performance", "structuredClone",
+  /* The two the background layer reaches for: `getComputedStyle` to read the wash
+     colour out of the stylesheet rather than repeating it, and `Image` to find out
+     whether the user's picture is there and how big it is before anything is
+     painted. Both are as global as `document`. */
+  "getComputedStyle", "Image", "CanvasRenderingContext2D", "File", "DataTransfer",
   // the bridge between the two classic scripts
   "Shell",
   ...KEYWORDS,
@@ -164,6 +169,14 @@ function usedNames(code) {
     if (prefix === "." || prefix === "$") continue; // a property, not a binding
     const before = code.slice(0, m.index).trimEnd().slice(-1);
     if (before === ".") continue; // also a property
+    /* `get background() { … }` defines a property; it does not read a name called
+       `background`. Without this the accessor `Shell.background` — which is how the
+       settings page asks what the background layer actually managed to paint — reads
+       as the very bug this scan exists to find. `set` for symmetry: the scan may miss
+       a genuine read of a function called `get`, which is the direction its own
+       documentation says to err in. */
+    const previousWord = code.slice(0, m.index).match(/([A-Za-z_$][\w$]*)\s*$/);
+    if (previousWord && (previousWord[1] === "get" || previousWord[1] === "set")) continue;
     const after = code.slice(m.index + full.length).trimStart();
     // An object literal key: `{ foo: 1 }` or a label.
     if (after.startsWith(":") && !after.startsWith("::")) {

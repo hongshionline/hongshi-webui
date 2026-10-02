@@ -29,6 +29,17 @@
    * Declaring it per page would give two pages two ideas of what a node is called. */
   var store = S.nodes;
 
+  /*
+   * What the 个性化 section's file dialog offers, and the size it warns about.
+   *
+   * Both are **hints**, and the shell is the authority: what a file really is gets
+   * decided by its first bytes (`background.rs`), because a `.jpg` that is really an
+   * animated GIF passes any name-based check. The 20 MB here saves a round trip; the
+   * 20 MB there is what is enforced.
+   */
+  var BACKGROUND_ACCEPT = "image/jpeg,image/png,image/webp,image/bmp,image/avif";
+  var BACKGROUND_MAX_MB = 20;
+
   /* --------------------------------------------------------------- helpers */
 
   function pageHead(title, sub) {
@@ -1533,6 +1544,66 @@
         '<div class="field"><label class="label" for="set-port">联机页默认的本地游戏端口</label>' +
         '<input class="input input--mono" id="set-port" type="number" min="1" max="65535" autocomplete="off"></div>' +
         "</div>") +
+      /*
+       * 个性化.
+       *
+       * The picture is a **path**, not an upload, and the difference is the whole
+       * design of this section. A browser cannot tell a page where a dropped file
+       * lives — `File` carries a name, a size and a timestamp and no path — so an
+       * "upload" here could only mean copying the user's picture into the client's
+       * own folder, which is a second copy of a 20 MB wallpaper to keep in step and
+       * to clean up. The shell reads the file where it is instead, and the price is
+       * that the path has to be typed: the drag and the file dialog are *hints* that
+       * fill in the file name, and the sentence under the field says so.
+       *
+       * 恢复内置背景 is a real button rather than "clear the box and save", because
+       * the thing a user wants back is a picture, not an empty string.
+       */
+      section("个性化", "image",
+        '<div class="settings-form">' +
+        '<div class="field">' +
+        '<div class="bg-label-row"><label class="label" for="set-bgpath">背景图片</label>' +
+        pill("set-bgstate", "down", "内置背景") + "</div>" +
+        '<div class="bg-drop" id="set-bgdrop">' +
+        '<input class="input input--mono" id="set-bgpath" type="text" autocomplete="off" ' +
+        'spellcheck="false" placeholder="图片的完整路径，例如 C:\\Users\\你\\Pictures\\bg.jpg">' +
+        '<button type="button" class="btn btn--ghost" id="set-bgbrowse">' +
+        icon("image") + "浏览…</button>" +
+        "</div>" +
+        '<input type="file" id="set-bgfile" accept="' + BACKGROUND_ACCEPT + '" hidden>' +
+        '<p class="section-note bg-hint" id="set-bgwhy"></p>' +
+        "</div>" +
+        '<div class="field-row">' +
+        '<div class="field"><div class="range-head"><label class="label" for="set-bgblur">模糊度</label>' +
+        '<span class="range-value" id="set-bgblur-value">0 px</span></div>' +
+        '<input type="range" id="set-bgblur" min="0" max="40" step="1" value="0"></div>' +
+        '<div class="field"><div class="range-head"><label class="label" for="set-bgdark">背景变暗</label>' +
+        '<span class="range-value" id="set-bgdark-value">62%</span></div>' +
+        '<input type="range" id="set-bgdark" min="0" max="100" step="1" value="62"></div>' +
+        "</div>" +
+        '<div class="field" id="set-bgcropfield" hidden>' +
+        '<div class="range-head"><label class="label" for="set-bgstage">裁剪区域</label>' +
+        '<span class="range-value" id="set-bgcrop-readout"></span></div>' +
+        '<div class="crop-stage" id="set-bgstage" role="application" ' +
+        'aria-label="拖动方框选择要显示的画面，四角可以缩放">' +
+        '<img class="crop-image" id="set-bgimage" alt="" draggable="false">' +
+        '<div class="crop-box" id="set-bgbox">' +
+        '<span class="crop-handle" data-corner="nw"></span>' +
+        '<span class="crop-handle" data-corner="ne"></span>' +
+        '<span class="crop-handle" data-corner="sw"></span>' +
+        '<span class="crop-handle" data-corner="se"></span>' +
+        "</div></div>" +
+        '<div class="crop-actions">' +
+        '<button type="button" class="btn btn--ghost btn--small" id="set-bgcrop-reset">' +
+        icon("refresh", "icon--sm") + "重置裁剪</button>" +
+        "</div></div>" +
+        '<div><button type="button" class="btn btn--ghost" id="set-bgclear">' +
+        icon("cross", "icon--sm") + "恢复内置背景</button></div>" +
+        "</div>",
+        "图片不会被复制：客户端只记住它在哪，用的时候直接读那个文件。" +
+        "所以这里要的是<b>完整路径</b>——浏览器出于安全不会把拖进来的文件的路径交给我们，" +
+        "拖拽和「浏览」只会帮你填上文件名，目录要自己补。" +
+        "原图被移动或删除后，会自动退回内置背景。") +
       section("保存", "save",
         '<div class="settings-actions">' +
         '<button type="button" class="btn btn--primary" id="set-save">' + icon("save", "icon--sm") + "保存设置</button>" +
@@ -1630,9 +1701,35 @@
       sysProxy.checked = loaded.use_system_proxy !== false;
       cache.value = String(loaded.node_cache_seconds || 300);
       port.value = String(loaded.default_game_port || 25565);
+
+      var blur = parseInt(loaded.background_blur, 10);
+      if (!isFinite(blur)) blur = 0;
+      bgBlur.value = String(blur);
+      bgBlurValue.textContent = blur + " px";
+
+      var darkness = parseInt(loaded.background_darkness, 10);
+      if (!isFinite(darkness)) darkness = 62;
+      bgDark.value = String(darkness);
+      bgDarkValue.textContent = darkness + "%";
+
+      bgPath.value = loaded.background_path || "";
+      adoptCrop(loaded);
+
       where.innerHTML =
         "<dt>配置文件</dt><dd>" + esc(S.settingsMeta.path || "—") + "</dd>" +
         "<dt>平台 HTTP</dt><dd>" + esc(S.settingsMeta.http_backend || "—") + "</dd>";
+
+      // Filling the form is also what applies it: the settings page is the only place
+      // these three numbers are edited, and a form that showed one weight while the
+      // window painted another is the bug this avoids.
+      S.applyBackground(loaded).then(adoptBackground);
+    }
+
+    /** The sentence the shell refused a save with, or the honest fallback. */
+    function errorText(body) {
+      if (body && body.reason) return body.reason;
+      if (body && body.error) return body.error;
+      return "客户端没有响应";
     }
 
     S.loadSettings(false).then(fill);
@@ -1646,23 +1743,404 @@
       input.addEventListener("change", markDirty);
     });
 
+    /* ------------------------------------------------ 个性化：背景 */
+
+    var bgDrop = el.querySelector("#set-bgdrop");
+    var bgPath = el.querySelector("#set-bgpath");
+    var bgFile = el.querySelector("#set-bgfile");
+    var bgWhy = el.querySelector("#set-bgwhy");
+    var bgState = el.querySelector("#set-bgstate");
+    var bgBlur = el.querySelector("#set-bgblur");
+    var bgBlurValue = el.querySelector("#set-bgblur-value");
+    var bgDark = el.querySelector("#set-bgdark");
+    var bgDarkValue = el.querySelector("#set-bgdark-value");
+    var bgClear = el.querySelector("#set-bgclear");
+    var bgCropField = el.querySelector("#set-bgcropfield");
+    var bgStage = el.querySelector("#set-bgstage");
+    var bgImage = el.querySelector("#set-bgimage");
+    var bgBox = el.querySelector("#set-bgbox");
+    var bgReadout = el.querySelector("#set-bgcrop-readout");
+    var bgCropReset = el.querySelector("#set-bgcrop-reset");
+
+    /*
+     * The crop the user is dragging, as fractions of the picture.
+     *
+     * Page state until 保存设置 writes it: the rectangle previews live against the
+     * real background behind this page, and 放弃修改 puts the saved one back. The
+     * per-mille integers the shell stores are this multiplied by a thousand.
+     */
+    var crop = { x: 0, y: 0, w: 1, h: 1 };
+    var MIN_CROP = 0.1;
+
+    function clampFraction(value, low, high) {
+      value = Number(value);
+      if (!isFinite(value)) return low;
+      return Math.max(low, Math.min(high, value));
+    }
+
+    /*
+     * The crop, as the shell stores it: one nested object of four per-mille numbers.
+     *
+     * Nested rather than four flat fields because they are one value — a rectangle —
+     * and `apply_json` reads them from inside that object, so a patch that carried
+     * `background_crop_w` on its own would be silently ignored. That is not a
+     * hypothetical: the first version of this page wrote exactly those flat keys, and
+     * the crop it saved was the default 0,0,1000,1000 every time, which looks correct
+     * until somebody drags the box.
+     */
+    function cropPatch() {
+      return {
+        background_crop: {
+          x: Math.round(crop.x * 1000),
+          y: Math.round(crop.y * 1000),
+          w: Math.round(crop.w * 1000),
+          h: Math.round(crop.h * 1000)
+        }
+      };
+    }
+
+    /*
+     * What the two sliders and the box currently add up to.
+     *
+     * The picture in it is always the **saved** one, not the text in the path box:
+     * that box is a field somebody is halfway through typing, and previewing a path
+     * the shell has not accepted yet would draw last week's picture under this week's
+     * filename. The path takes effect on 保存设置, like every other field here.
+     */
+    function draft() {
+      var base = S.settings || {};
+      return {
+        background_path: base.background_path || "",
+        background_blur: parseInt(bgBlur.value, 10) || 0,
+        background_darkness: parseInt(bgDark.value, 10) || 0,
+        background_crop: cropPatch().background_crop
+      };
+    }
+
+    /** Where the picture is drawn inside the stage, in stage pixels. */
+    function stageImageRect() {
+      var stageWidth = bgStage.clientWidth;
+      var stageHeight = bgStage.clientHeight;
+      var natural = { w: bgImage.naturalWidth, h: bgImage.naturalHeight };
+      if (!stageWidth || !stageHeight || !natural.w || !natural.h) return null;
+      var scale = Math.min(stageWidth / natural.w, stageHeight / natural.h);
+      var width = natural.w * scale;
+      var height = natural.h * scale;
+      return {
+        left: (stageWidth - width) / 2,
+        top: (stageHeight - height) / 2,
+        width: width,
+        height: height
+      };
+    }
+
+    function paintCrop() {
+      var rect = stageImageRect();
+      if (!rect) return;
+      bgBox.style.left = (rect.left + crop.x * rect.width) + "px";
+      bgBox.style.top = (rect.top + crop.y * rect.height) + "px";
+      bgBox.style.width = (crop.w * rect.width) + "px";
+      bgBox.style.height = (crop.h * rect.height) + "px";
+      bgReadout.textContent =
+        Math.round(crop.w * bgImage.naturalWidth) + " × " +
+        Math.round(crop.h * bgImage.naturalHeight) + " 像素";
+    }
+
+    /**
+     * Everything the two sliders and the box move, applied to the page behind this
+     * one — the preview *is* the real background, so there is no second rendering of
+     * the picture that could disagree with it.
+     */
+    function preview() {
+      S.previewBackground(draft());
+      paintCrop();
+    }
+
+    /**
+     * The crop tool exists only while there is a picture to crop.
+     *
+     * `S.background` is what the layer actually managed to put on screen, so this is
+     * the one condition that cannot be wrong: a path the shell refused, a file that
+     * went missing, or a format this browser will not decode all leave the tool
+     * hidden rather than offering to crop a picture that is not there.
+     */
+    function syncCropTool() {
+      var live = S.background;
+      var usable = live.state === "ok" && !!live.url;
+      bgCropField.hidden = !usable;
+      if (!usable) {
+        bgImage.removeAttribute("src");
+        return;
+      }
+      if (bgImage.getAttribute("src") !== live.url) bgImage.setAttribute("src", live.url);
+      // The rectangle needs the picture's natural size, which arrives with the load.
+      if (bgImage.complete && bgImage.naturalWidth) paintCrop();
+      else bgImage.onload = paintCrop;
+    }
+
+    /** The line under the path field: which picture is on screen, or why it is not. */
+    function sayBackground() {
+      var meta = S.settingsMeta.background || {};
+      var live = S.background;
+      var path = (S.settings && S.settings.background_path) || "";
+
+      if (!path) {
+        setPill(bgState, "down", "内置背景");
+        bgWhy.innerHTML = "正在使用客户端自带的背景。把一张图片的完整路径填在上面，" +
+          "或者把图片拖到这一行，就能换成它。";
+        return;
+      }
+      if (live.state === "ok") {
+        setPill(bgState, "ok", "自定义背景");
+        var size = live.width ? "（" + live.width + " × " + live.height + "）" : "";
+        bgWhy.innerHTML = "正在使用 " + esc(meta.path || path) + size +
+          "。原图被移动或删除后，会自动退回内置背景。";
+        return;
+      }
+      setPill(bgState, "down", "已退回内置背景");
+      bgWhy.innerHTML = "这张图片现在读不到，已经退回内置背景：" +
+        esc(live.reason || meta.reason || "原因未知");
+    }
+
+    function adoptBackground() {
+      syncCropTool();
+      sayBackground();
+    }
+
+    function adoptCrop(loaded) {
+      var fraction = S.cropFraction(loaded);
+      crop = { x: fraction.x, y: fraction.y, w: fraction.w, h: fraction.h };
+    }
+
+    /*
+     * A dropped or picked file can only ever be a hint.
+     *
+     * The browser hands over a name, a size and a timestamp and nothing else — the
+     * path is a security boundary it does not cross, and no amount of asking changes
+     * that. So this fills in the file name and says what is missing, instead of
+     * pretending to accept an upload and quietly copying the picture somewhere.
+     *
+     * The two checks here are the ones a `File` can answer: its size, and the name it
+     * arrived with. What the file *is* gets decided by the shell, from its first
+     * bytes, and refused there with a sentence that names what is accepted.
+     */
+    function prefillFromFile(file) {
+      if (!file) return;
+      if (/\.gif$/i.test(file.name || "")) {
+        S.toast("不支持 GIF：会动的图片不能做背景", "warn");
+        return;
+      }
+      if (file.size > BACKGROUND_MAX_MB * 1024 * 1024) {
+        S.toast("这张图片有 " + (file.size / 1048576).toFixed(1) + " MB，超过了 " +
+          BACKGROUND_MAX_MB + " MB 上限", "warn");
+        return;
+      }
+      var value = bgPath.value.trim();
+      if (/[\\/]$/.test(value)) {
+        value = value + file.name;
+      } else {
+        var cut = Math.max(value.lastIndexOf("\\"), value.lastIndexOf("/"));
+        value = cut >= 0 ? value.slice(0, cut + 1) + file.name : file.name;
+      }
+      bgPath.value = value;
+      markDirty();
+      S.toast("已填上文件名。浏览器不会把完整路径交给我们，请把目录补全", "warn");
+    }
+
+    // The row is the drop target, so the whole field lights up rather than a strip of
+    // it. `dragleave` fires on the children too — without the containment test the
+    // highlight flickers as the pointer crosses the input inside the row.
+    ["dragenter", "dragover"].forEach(function (name) {
+      bgDrop.addEventListener(name, function (event) {
+        event.preventDefault();
+        bgDrop.dataset.over = "1";
+      });
+    });
+    bgDrop.addEventListener("dragleave", function (event) {
+      if (event.relatedTarget && bgDrop.contains(event.relatedTarget)) return;
+      bgDrop.dataset.over = "0";
+    });
+    bgDrop.addEventListener("drop", function (event) {
+      event.preventDefault();
+      bgDrop.dataset.over = "0";
+      var files = event.dataTransfer && event.dataTransfer.files;
+      if (files && files.length) prefillFromFile(files[0]);
+    });
+
+    el.querySelector("#set-bgbrowse").addEventListener("click", function () {
+      bgFile.click();
+    });
+    bgFile.addEventListener("change", function () {
+      if (bgFile.files && bgFile.files.length) prefillFromFile(bgFile.files[0]);
+      // Cleared so that picking the same file twice fires `change` twice: without
+      // this, a second attempt at a file the user already chose does nothing at all.
+      bgFile.value = "";
+    });
+
+    bgPath.addEventListener("input", markDirty);
+    bgPath.addEventListener("change", markDirty);
+
+    bgBlur.addEventListener("input", function () {
+      bgBlurValue.textContent = bgBlur.value + " px";
+      markDirty();
+      preview();
+    });
+    bgDark.addEventListener("input", function () {
+      bgDarkValue.textContent = bgDark.value + "%";
+      markDirty();
+      preview();
+    });
+
+    /**
+     * Move or resize the rectangle, from a drag in stage coordinates.
+     *
+     * `from` is where the gesture started, so every move is computed against the
+     * original rectangle rather than against the previous move: accumulating deltas
+     * is how a drag drifts when a pointer event is dropped.
+     */
+    function applyDrag(mode, from, dx, dy) {
+      if (mode === "move") {
+        crop = {
+          x: clampFraction(from.x + dx, 0, 1 - from.w),
+          y: clampFraction(from.y + dy, 0, 1 - from.h),
+          w: from.w,
+          h: from.h
+        };
+        return;
+      }
+      var left = from.x;
+      var top = from.y;
+      var right = from.x + from.w;
+      var bottom = from.y + from.h;
+      if (mode.indexOf("w") >= 0) left = clampFraction(from.x + dx, 0, right - MIN_CROP);
+      if (mode.indexOf("e") >= 0) right = clampFraction(right + dx, left + MIN_CROP, 1);
+      if (mode.indexOf("n") >= 0) top = clampFraction(from.y + dy, 0, bottom - MIN_CROP);
+      if (mode.indexOf("s") >= 0) bottom = clampFraction(bottom + dy, top + MIN_CROP, 1);
+      crop = { x: left, y: top, w: right - left, h: bottom - top };
+    }
+
+    /*
+     * Pointer capture, so the drag keeps working when the pointer leaves the box —
+     * which it does constantly, since the handles sit on the box's own edge. Every
+     * listener is on the box and is removed when the gesture ends, and none of them is
+     * on `document`: a page that adds document listeners has to remove them again on
+     * `destroy`, and the box is enough.
+     */
+    bgBox.addEventListener("pointerdown", function (event) {
+      if (event.button !== 0) return;
+      var rect = stageImageRect();
+      if (!rect) return;
+      event.preventDefault();
+
+      var mode = (event.target && event.target.dataset && event.target.dataset.corner) || "move";
+      var startX = event.clientX;
+      var startY = event.clientY;
+      var from = { x: crop.x, y: crop.y, w: crop.w, h: crop.h };
+      var box = bgBox;
+      try {
+        box.setPointerCapture(event.pointerId);
+      } catch (err) {
+        // An old browser, or a pointer the capture refused: the gesture still works
+        // while the pointer stays over the box, and the listeners are cleaned up the
+        // moment it is released.
+      }
+
+      function onMove(move) {
+        applyDrag(mode, from, (move.clientX - startX) / rect.width, (move.clientY - startY) / rect.height);
+        markDirty();
+        preview();
+      }
+      function onEnd() {
+        box.removeEventListener("pointermove", onMove);
+        box.removeEventListener("pointerup", onEnd);
+        box.removeEventListener("pointercancel", onEnd);
+      }
+      box.addEventListener("pointermove", onMove);
+      box.addEventListener("pointerup", onEnd);
+      box.addEventListener("pointercancel", onEnd);
+    });
+
+    bgCropReset.addEventListener("click", function () {
+      crop = { x: 0, y: 0, w: 1, h: 1 };
+      markDirty();
+      preview();
+    });
+
+    bgClear.addEventListener("click", function () {
+      S.saveSettings({ background_path: "" }).then(function (result) {
+        if (!result.ok) {
+          S.toast("恢复失败：" + errorText(result.body), "warn");
+          return;
+        }
+        bgPath.value = "";
+        setPill(state, "ok", "已保存");
+        S.applyBackground(S.settings).then(adoptBackground);
+        S.toast("已经换回内置背景");
+      });
+    });
+
+    /**
+     * Put a newly chosen picture's own idea of 背景变暗 on the slider, and save it.
+     *
+     * Measured in the page from the picture's pixels (`suggestDarkness`), because how
+     * heavy the wash has to be is a property of the picture: a dark wallpaper needs
+     * almost none, a white one needs most of it. The save is tiny and it is worth it —
+     * the alternative is every user starting at 62% and dragging a slider to find out
+     * what their own wallpaper wanted.
+     */
+    function seedDarkness() {
+      S.suggestDarkness(S.background.url).then(function (value) {
+        if (value === null) return;
+        bgDark.value = String(value);
+        bgDarkValue.textContent = value + "%";
+        S.saveSettings({ background_darkness: value }).then(function () {
+          S.previewBackground(S.settings);
+          S.toast("已按这张图的亮度把「背景变暗」设为 " + value + "%");
+        });
+      });
+    }
+
     el.querySelector("#set-save").addEventListener("click", function () {
+      var previousPath = (S.settings && S.settings.background_path) || "";
       var patch = {
         api_base: base.value.trim(),
         proxy: proxy.value.trim(),
         use_system_proxy: sysProxy.checked,
         node_cache_seconds: parseInt(cache.value, 10) || 300,
-        default_game_port: parseInt(port.value, 10) || 25565
+        default_game_port: parseInt(port.value, 10) || 25565,
+        background_path: bgPath.value.trim(),
+        background_blur: parseInt(bgBlur.value, 10) || 0,
+        background_darkness: parseInt(bgDark.value, 10) || 0
       };
+      patch.background_crop = cropPatch().background_crop;
       S.saveSettings(patch).then(function (result) {
         var body = result.body || {};
         if (result.ok && body.settings) {
+          var changed = (body.settings.background_path || "") !== previousPath;
           fill(body.settings);
           setPill(state, "ok", "已保存");
           S.toast("设置已保存到 " + (body.settings.path || "配置文件"));
+          if (changed) {
+            S.applyBackground(body.settings).then(function () {
+              adoptBackground();
+              if (S.background.state === "ok") seedDarkness();
+            });
+          }
         } else {
+          /*
+           * A refused background is the interesting failure here, and the shell says
+           * which one it was — 找不到这个文件 / 不支持 GIF / 超过 20 MB — so it goes on
+           * screen where the field is rather than into a toast that disappears.
+           */
           setPill(state, "down", "保存失败");
-          S.toast("保存失败：" + (body.error || "客户端没有响应"), "warn");
+          var why = errorText(body);
+          S.toast("保存失败：" + why, "warn");
+          bgWhy.innerHTML = esc(why);
+          // Nothing was written, so the live preview goes back to what is stored —
+          // but only the *layer*: `adoptBackground` would also rewrite the line above
+          // with the current state's sentence, and the sentence the user needs right
+          // now is the one saying why their path was refused.
+          S.applyBackground(S.settings).then(syncCropTool);
         }
       }).catch(function (err) {
         setPill(state, "down", "保存失败");

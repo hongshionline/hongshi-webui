@@ -507,6 +507,94 @@ try {
     Assert-That 'settings reports the fields the page edits' ($cloud.Status -eq 200 -and $cloud.Body.Contains('api_base') -and $cloud.Body.Contains('default_game_port')) $cloud.Body
 
     # -----------------------------------------------------------------------
+    # 个性化: the picture the user can put behind the interface.
+    #
+    # Three behaviours are worth a real socket here. The client **does not copy** the
+    # file - it remembers the path and reads the picture where it lives - so what has
+    # to hold is that it serves that file, that it refuses a path it cannot use *with
+    # a state a page can act on*, and that a refused path is never stored.
+    #
+    # This block changes the developer's own settings, so it reads what was there
+    # first and puts it back at the end. An acceptance script that leaves somebody's
+    # client pointing at a test file in %TEMP% is a worse bug than any it can find.
+    Write-Host ''
+    Write-Host 'the background the user can set' -ForegroundColor Cyan
+
+    $bgDir = Join-Path ([IO.Path]::GetTempPath()) ("hongshi-verify-bg-{0}" -f $PID)
+    New-Item -ItemType Directory -Force $bgDir | Out-Null
+    $bgPng = Join-Path $bgDir 'wall.png'
+    $pngBytes = [byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A) + [byte[]]::new(64)
+    [IO.File]::WriteAllBytes($bgPng, $pngBytes)
+    $bgGif = Join-Path $bgDir 'anim.gif'
+    [IO.File]::WriteAllBytes($bgGif, [byte[]](0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 1, 0, 1, 0, 0x80, 0, 0))
+
+    function Set-Background([string]$value) {
+        # Escaped by hand: these are Windows paths, and a lone backslash is not a
+        # legal JSON escape. The shell's parser reads what it is given, which is the
+        # point of posting the same shape the page posts.
+        $escaped = $value.Replace('\', '\\').Replace('"', '\"')
+        return Send-Request $port 'POST' '/api/settings' $authority @{} ("{""background_path"":""$escaped""}")
+    }
+
+    $originalPath = ((Send-Request $port 'GET' '/api/settings' $authority @{} $null).Body | ConvertFrom-Json).settings.background_path
+
+    $cleared = Set-Background ''
+    Assert-That 'clearing the path is the built-in background, not an error' `
+        ($cleared.Status -eq 200 -and (($cleared.Body | ConvertFrom-Json).settings.background_path -eq '')) $cleared.Body
+
+    $absent = Send-Request $port 'GET' '/api/background' $authority @{} $null
+    Assert-That 'with nothing set the endpoint says so as JSON, not as a broken image' `
+        ($absent.Status -eq 404 -and $absent.Body.Contains('"state":"none"')) "status $($absent.Status): $($absent.Body)"
+
+    $set = Set-Background $bgPng
+    Assert-That 'a real picture is accepted' ($set.Status -eq 200) "status $($set.Status): $($set.Body)"
+
+    $served = Send-Request $port 'GET' '/api/background' $authority @{} $null
+    Assert-That 'the picture is served as the image it is' `
+        ($served.Status -eq 200 -and $served.Text -match '(?i)content-type: image/png') "status $($served.Status)"
+    # Byte for byte: the shell has no image decoder and must not pretend to have one.
+    Assert-That 'and served byte for byte, not re-encoded' `
+        ($served.Text -match ("(?i)content-length: {0}\r" -f $pngBytes.Length)) $served.Text
+    Assert-That 'the body is the file that was pointed at' ($served.Body.Contains('PNG')) 'the body'
+
+    $etagMatch = [regex]::Match($served.Text, '(?i)etag: ([^\r\n]+)')
+    Assert-That 'it carries a validator' $etagMatch.Success $served.Text
+    if ($etagMatch.Success) {
+        $etag = $etagMatch.Groups[1].Value.Trim()
+        $fresh = Send-Request $port 'GET' '/api/background' $authority @{ 'If-None-Match' = $etag } $null
+        Assert-That 'a reload revalidates instead of resending the whole picture' ($fresh.Status -eq 304) "status $($fresh.Status)"
+    }
+
+    $healthWithBackground = Send-Request $port 'GET' '/api/health' $authority @{} $null
+    Assert-That 'health reports the background the page is showing' `
+        ($healthWithBackground.Body -match '"background":\{"state":"ok"') $healthWithBackground.Body
+
+    # Each refusal has its own state, because "the file is missing" and "that is a
+    # GIF" send a person to different places. The wording is Chinese and this script
+    # is ASCII-only, so what is asserted here is that a reason came with the state.
+    $missing = Set-Background (Join-Path $bgDir 'not-here.png')
+    Assert-That 'a path that does not exist is refused' ($missing.Status -eq 400 -and $missing.Body.Contains('"state":"missing"')) "status $($missing.Status): $($missing.Body)"
+    Assert-That 'the refusal carries a reason for a person' ($missing.Body -match '"reason":"[^"]+"') $missing.Body
+
+    $folder = Set-Background $bgDir
+    Assert-That 'a folder is refused' ($folder.Status -eq 400 -and $folder.Body.Contains('"state":"not_a_file"')) $folder.Body
+
+    $gif = Set-Background $bgGif
+    Assert-That 'a GIF is refused for being animated' ($gif.Status -eq 400 -and $gif.Body.Contains('"state":"gif"')) $gif.Body
+
+    $relative = Set-Background 'pictures\wall.png'
+    Assert-That 'a relative path is refused rather than guessed' ($relative.Status -eq 400 -and $relative.Body.Contains('"state":"relative"')) $relative.Body
+
+    $afterRefusals = ((Send-Request $port 'GET' '/api/settings' $authority @{} $null).Body | ConvertFrom-Json)
+    Assert-That 'none of the refusals was stored' ($afterRefusals.settings.background_path -eq $bgPng) $afterRefusals.settings.background_path
+    Assert-That 'and the crop came along in the same shape the shell reads' `
+        ($null -ne $afterRefusals.settings.background_crop -and $afterRefusals.settings.background_crop.w -ge 100) ($afterRefusals.settings | ConvertTo-Json -Compress)
+
+    # Put the client back the way it was found, and take the test pictures with us.
+    Set-Background $originalPath | Out-Null
+    Remove-Item -Recurse -Force $bgDir -ErrorAction SilentlyContinue
+
+    # -----------------------------------------------------------------------
     # Minecraft 资讯. The shell fetches Mojang's launcher feed and trims it; the page
     # never talks to Mojang itself. This is the one block that needs the internet, so
     # a feed that does not answer is skipped rather than failed - what is asserted is
@@ -883,6 +971,41 @@ Assert-That 'the help screenshots address their files through the helper' `
     (($pagesText -match 'S\.assetUrl\("asset/" \+ file\)') -and
      ($pagesText -match 'help-port-menu\.webp') -and ($pagesText -match 'help-port-chat\.webp'))
 Assert-That 'no page script hardcodes an asset path' ($pagesText -notmatch 'src="/asset')
+
+# ---------------------------------------------------------------------------
+# The personalized background, from the source side.
+#
+# The two ends have to agree on a shape that is easy to get wrong. The shell reads the
+# crop out of **one nested object** (`background_crop`), so a page that sends four flat
+# keys gets a crop nobody asked for - silently, because the rest of the patch applies
+# and the rectangle left over is the default one, which looks right until somebody
+# drags the box. That exact mistake was made once while building this; these are the
+# checks that would have caught it in a second instead of in a browser.
+Write-Host ''
+Write-Host 'the personalized background' -ForegroundColor Cyan
+
+Assert-That 'the crop travels as the one object the shell reads' `
+    (($pagesText -match 'background_crop: \{') -and ($appText -match 'settings\.background_crop'))
+Assert-That 'the settings page has the personalization controls' `
+    (($pagesText -match 'id="set-bgpath"') -and ($pagesText -match 'id="set-bgblur"') -and
+     ($pagesText -match 'id="set-bgdark"') -and ($pagesText -match 'id="set-bgbox"'))
+# A browser will not hand a page a dropped file's path, so the drop is a hint: it fills
+# in the name and says so. Both entries into that helper are checked, because losing
+# one of them is losing half the feature.
+Assert-That 'the drop and the file dialog only fill in a name' `
+    (($pagesText -match 'function prefillFromFile') -and
+     ($pagesText -match 'prefillFromFile\(files\[0\]\)') -and
+     ($pagesText -match 'prefillFromFile\(bgFile\.files\[0\]\)'))
+# Blur and crop belong to the browser: the crate has no image decoder, and a background
+# that needed one would be a dependency in the one binary that has none.
+Assert-That 'blur and crop are the browser''s job, not the shell''s' `
+    (($appText -match '"--bg-blur"') -and ($appText -match 'function fitBackground') -and
+     ([IO.File]::ReadAllText((Join-Path $webDir 'main.css')) -match 'filter: blur\(var\(--bg-blur'))
+Assert-That 'the wash weight is measured from the picture itself' ($appText -match 'function suggestDarkness')
+Assert-That 'a picture that will not load falls back to the built-in one' `
+    (($appText -match 'function useBuiltInBackground') -and ($appText -match 'bgEl\.dataset\.on = "0"'))
+Assert-That 'the built-in background stays on the body, not behind a probe' `
+    ([IO.File]::ReadAllText((Join-Path $webDir 'main.css')) -match 'url\("asset/lowpoly\.webp"\)')
 
 # 房间开着的那一段时间是唯一能问「朋友怎么进来」的时刻，所以那两个入口就长在地址下面。
 # 引导只出现一次，帮助页得从这个位置进得去。

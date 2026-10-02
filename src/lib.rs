@@ -40,6 +40,7 @@ pub const CHANNEL: &str = "测试版";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod assets;
+pub mod background;
 pub mod browser;
 pub mod config;
 pub mod http_server;

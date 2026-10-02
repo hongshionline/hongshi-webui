@@ -133,6 +133,7 @@ impl Response {
             200 => "OK",
             204 => "No Content",
             206 => "Partial Content",
+            304 => "Not Modified",
             400 => "Bad Request",
             403 => "Forbidden",
             404 => "Not Found",
@@ -854,6 +855,7 @@ fn route(
             "/api/health" => health(context),
             "/api/echo" => echo(body),
             "/api/settings" => settings_endpoint(request, body, context),
+            "/api/background" => background_endpoint(request, context),
             "/api/daily-news" => daily_news(context),
             "/api/version" => version_endpoint(context),
             "/api/nodes" => nodes_endpoint(context, &request.query),
@@ -1181,6 +1183,34 @@ fn settings_endpoint(request: &Request, body: &[u8], context: &ServerContext) ->
         let mut updated = context.settings();
         updated.apply_json(&text);
 
+        // A background the shell cannot read is refused *while the person who typed
+        // the path is still looking at the field*, which is the only moment the
+        // message is worth anything. Storing it and failing later would put the same
+        // sentence in a status line the user has already walked away from.
+        //
+        // Only when the patch mentions the field: every other save would otherwise
+        // re-judge a path that is there and fine, and re-reading the file on each
+        // keystroke-save is not the endpoint's job.
+        if json_field(&text, "background_path").is_some() {
+            if let Err(problem) = crate::background::resolve(&updated.background_path) {
+                if problem != crate::background::Problem::NotSet {
+                    info_fields(
+                        "refused a background that cannot be used",
+                        &[("state", problem.state())],
+                    );
+                    return Response::new(
+                        400,
+                        "application/json; charset=utf-8",
+                        format!(
+                            r#"{{"state":"{}","field":"background_path","reason":"{}"}}"#,
+                            problem.state(),
+                            escape_json(&problem.reason())
+                        ),
+                    );
+                }
+            }
+        }
+
         let path = match crate::config::save(&updated) {
             Ok(path) => path,
             Err(err) => {
@@ -1199,11 +1229,104 @@ fn settings_endpoint(request: &Request, body: &[u8], context: &ServerContext) ->
 
     let current = context.settings();
     Response::json(format!(
-        r#"{{"settings":{},"path":"{}","http_backend":"{}"}}"#,
+        r#"{{"settings":{},"path":"{}","http_backend":"{}","background":{}}}"#,
         current.to_json(),
         escape_json(&crate::config::primary_path().display().to_string()),
         escape_json(context.http_backend),
+        background_json(&current),
     ))
+}
+
+/// Serve the background the user configured, or say why there is not one.
+///
+/// One URL answers both questions, and that is deliberate: the page asks whether it
+/// is usable with an `Image()` probe, and the settings page asks *why not* with a
+/// `fetch` of the same address. Two endpoints would be two answers that can disagree.
+/// JSON on failure, image bytes on success — a browser loading it as a picture never
+/// reads the body of a failure, and the page can.
+///
+/// The path is never taken from the request. There is exactly one background, it is
+/// the one in the settings file, and this endpoint serves that or nothing — which is
+/// what keeps "a path the client may read" from becoming "any path".
+fn background_endpoint(request: &Request, context: &ServerContext) -> Response {
+    let settings = context.settings();
+    let refuse = |problem: &crate::background::Problem| {
+        let status = match problem {
+            crate::background::Problem::TooLarge(_) => 413,
+            _ => 404,
+        };
+        Response::new(
+            status,
+            "application/json; charset=utf-8",
+            format!(
+                r#"{{"state":"{}","reason":"{}","path":"{}"}}"#,
+                problem.state(),
+                escape_json(&problem.reason()),
+                escape_json(settings.background_path.trim())
+            ),
+        )
+        .header("Cache-Control", "no-store")
+    };
+
+    let resolved = match crate::background::resolve(&settings.background_path) {
+        Ok(resolved) => resolved,
+        Err(problem) => return refuse(&problem),
+    };
+
+    // A 20 MB wallpaper is not something to send again because the user pressed F5.
+    // Revalidation is on the same validator the page puts in its `?v=`.
+    let etag = resolved.etag();
+    let fresh = request
+        .header("if-none-match")
+        .is_some_and(|value| value.trim() == etag);
+    if fresh {
+        return Response::new(304, resolved.kind.content_type(), Vec::new())
+            .bodyless()
+            .header("ETag", etag);
+    }
+
+    match crate::background::read(&resolved) {
+        Ok(bytes) => Response::new(200, resolved.kind.content_type(), bytes)
+            .header("ETag", etag)
+            .header("Cache-Control", "no-cache"),
+        Err(problem) => refuse(&problem),
+    }
+}
+
+/// The background, as the health and settings bodies report it.
+///
+/// A `stat` and a 16-byte read, so it is cheap enough for an endpoint the page
+/// polls; the picture itself is only ever read by [`background_endpoint`].
+fn background_json(settings: &crate::config::Settings) -> String {
+    let path = settings.background_path.trim();
+    match crate::background::resolve(path) {
+        Ok(resolved) => format!(
+            r#"{{"state":"ok","path":"{}","kind":"{}","content_type":"{}","bytes":{},"modified_ms":{},"blur":{},"darkness":{},"crop":{{"x":{},"y":{},"w":{},"h":{}}}}}"#,
+            escape_json(&resolved.path.display().to_string()),
+            resolved.kind.name(),
+            resolved.kind.content_type(),
+            resolved.bytes,
+            resolved.modified_ms,
+            settings.background_blur,
+            settings.background_darkness,
+            settings.background_crop_x,
+            settings.background_crop_y,
+            settings.background_crop_w,
+            settings.background_crop_h,
+        ),
+        Err(problem) => format!(
+            r#"{{"state":"{}","path":"{}","reason":"{}","blur":{},"darkness":{},"crop":{{"x":{},"y":{},"w":{},"h":{}}}}}"#,
+            problem.state(),
+            escape_json(path),
+            escape_json(&problem.reason()),
+            settings.background_blur,
+            settings.background_darkness,
+            settings.background_crop_x,
+            settings.background_crop_y,
+            settings.background_crop_w,
+            settings.background_crop_h,
+        ),
+    }
 }
 
 /// GET `/api/version` — the running build, and whether a newer one exists.
@@ -1813,6 +1936,7 @@ fn health(context: &ServerContext) -> Response {
             "\"launches\":{},",
             "\"url\":\"{}\",",
             "\"web_source\":\"{}\",",
+            "\"background\":{},",
             "\"kernel\":{}}}"
         ),
         escape_json(crate::VERSION),
@@ -1823,6 +1947,7 @@ fn health(context: &ServerContext) -> Response {
         context.launches,
         escape_json(&context.url),
         escape_json(&context.web_source),
+        background_json(&context.settings()),
         kernel_json(&kernel),
     );
     Response::json(body)
@@ -2272,6 +2397,134 @@ mod tests {
         ] {
             assert!(body.contains(field), "{field} missing from {body}");
         }
+        for field in [
+            "background_path",
+            "background_blur",
+            "background_darkness",
+            "background_crop",
+        ] {
+            assert!(body.contains(field), "{field} missing from {body}");
+        }
+    }
+
+    #[test]
+    fn the_background_endpoint_answers_json_when_there_is_no_background() {
+        // Not an error: it is the state every install starts in, and the page reads
+        // it as "use the built-in artwork".
+        let ctx = context();
+        let shutdown = shutdown();
+        let response = route(
+            &request("GET", "/api/background", "", &[("host", "127.0.0.1:1")]),
+            &[],
+            &ctx,
+            &shutdown,
+        );
+        assert_eq!(response.status, 404);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body = String::from_utf8(response.body).unwrap();
+        assert!(body.contains(r#""state":"none""#), "{body}");
+    }
+
+    #[test]
+    fn the_background_endpoint_serves_the_file_and_revalidates_it() {
+        let dir = std::env::temp_dir().join(format!("hongshi-bg-http-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("wall.png");
+        let mut picture = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        picture.extend_from_slice(&[0u8; 48]);
+        std::fs::write(&png, &picture).unwrap();
+
+        let ctx = context();
+        {
+            let mut settings = ctx.settings.write().unwrap();
+            settings.background_path = png.display().to_string();
+            settings.background_blur = 8;
+            settings.background_darkness = 70;
+        }
+        let shutdown = shutdown();
+        let host = [("host", "127.0.0.1:1")];
+
+        let served = route(&request("GET", "/api/background", "", &host), &[], &ctx, &shutdown);
+        assert_eq!(served.status, 200);
+        assert_eq!(served.content_type, "image/png", "the sniffed type, not the extension");
+        assert_eq!(served.body, picture, "the user's own bytes, not a re-encode");
+
+        // A 20 MB wallpaper must not be sent again because somebody pressed F5.
+        let etag = served
+            .header_value("etag")
+            .expect("an ETag is what makes revalidation possible")
+            .to_string();
+        let unchanged = route(
+            &request(
+                "GET",
+                "/api/background",
+                "",
+                &[("host", "127.0.0.1:1"), ("if-none-match", &etag)],
+            ),
+            &[],
+            &ctx,
+            &shutdown,
+        );
+        assert_eq!(unchanged.status, 304);
+
+        // Health reports the same file, so the two answers cannot disagree.
+        let health = route(&request("GET", "/api/health", "", &host), &[], &ctx, &shutdown);
+        let health = String::from_utf8(health.body).unwrap();
+        assert!(health.contains(r#""background":{"state":"ok""#), "{health}");
+        assert!(health.contains(r#""kind":"png""#), "{health}");
+        assert!(health.contains(r#""darkness":70"#), "{health}");
+        assert!(health.contains(r#""crop":{"x":0,"y":0,"w":1000,"h":1000}"#), "{health}");
+
+        // The extension lies and the bytes decide — the same rule as the setting.
+        std::fs::write(&png, b"GIF89a\x01\x00\x01\x00\x80\x00\x00").unwrap();
+        let lying = route(&request("GET", "/api/background", "", &host), &[], &ctx, &shutdown);
+        assert_eq!(lying.status, 404);
+        let body = String::from_utf8(lying.body).unwrap();
+        assert!(body.contains(r#""state":"gif""#), "{body}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_settings_save_cannot_store_a_background_that_does_not_work() {
+        let ctx = context();
+        let shutdown = shutdown();
+        let patch = br#"{"background_path":"C:\\definitely\\not\\here.png"}"#;
+        let response = route(
+            &request("POST", "/api/settings", "", &[("host", "127.0.0.1:1")]),
+            patch,
+            &ctx,
+            &shutdown,
+        );
+        assert_eq!(response.status, 400, "a path the shell cannot read is not saved");
+        let body = String::from_utf8(response.body).unwrap();
+        assert!(body.contains(r#""state":"missing""#), "{body}");
+        assert!(body.contains(r#""field":"background_path""#), "{body}");
+        assert!(body.contains("找不到"), "the reason must be for a person: {body}");
+        assert_eq!(
+            ctx.settings().background_path,
+            "",
+            "a refused save leaves the settings alone"
+        );
+    }
+
+    #[test]
+    fn a_relative_background_path_is_refused_rather_than_guessed() {
+        // It would be resolved against the directory the client was started in, which
+        // for a double-clicked download is nowhere the user has ever been.
+        let ctx = context();
+        let shutdown = shutdown();
+        let patch = br#"{"background_path":"Pictures\\bg.png"}"#;
+        let response = route(
+            &request("POST", "/api/settings", "", &[("host", "127.0.0.1:1")]),
+            patch,
+            &ctx,
+            &shutdown,
+        );
+        assert_eq!(response.status, 400);
+        let body = String::from_utf8(response.body).unwrap();
+        assert!(body.contains(r#""state":"relative""#), "{body}");
+        assert!(body.contains("完整路径"), "{body}");
     }
 
     #[test]

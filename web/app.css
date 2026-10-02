@@ -1539,6 +1539,127 @@ html.has-dialog body {
   margin: 0;
 }
 
+/* ---------------------------------------------------- 个性化 / background */
+
+/*
+ * The path field and its button are one drop target, which is why the border is on
+ * the row rather than on the input: the thing a file is dropped on has to look like
+ * one thing. It lights up on `dragover` because a drop zone that does not react is
+ * indistinguishable from a page that cannot be dropped on — and the drop is only
+ * ever a *hint* here (a browser will not hand over a file's path), so the row has to
+ * say it noticed.
+ */
+.bg-drop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px;
+  border: 1px dashed transparent;
+  border-radius: 14px;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.bg-drop .input { flex: 1 1 auto; min-width: 0; }
+/* The button keeps its own width: squeezed by the input's growth it wraps 「浏览…」 onto
+   two lines, which reads as a broken control rather than a narrow one. */
+.bg-drop .btn { flex: 0 0 auto; white-space: nowrap; }
+.bg-drop[data-over="1"] {
+  border-color: var(--signal);
+  background: rgba(255, 255, 255, .05);
+}
+
+.bg-label-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* The one sentence that explains why dropping a file only fills in its name. */
+.bg-hint { margin: 8px 0 0; }
+
+/* A slider's number lives in its label: a value that is only implied by where the
+   thumb sits is a value nobody can read back. */
+.range-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.range-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+input[type="range"] {
+  width: 100%;
+  margin: 8px 0 0;
+  accent-color: var(--signal);
+}
+
+/*
+ * The crop tool.
+ *
+ * The stage is a fixed 16:9 box — the shape the board is normally looked at in —
+ * with the picture `contain`ed inside it, so the whole image stays visible while the
+ * rectangle is dragged around on top of it. `touch-action: none` is what makes that
+ * drag work on a touchscreen instead of scrolling the page under the finger.
+ */
+.crop-stage {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  aspect-ratio: 16 / 9;
+  margin-top: 10px;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--wash);
+  touch-action: none;
+  user-select: none;
+}
+.crop-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.crop-box {
+  position: absolute;
+  border: 1.5px solid var(--signal);
+  border-radius: 4px;
+  cursor: move;
+  /* Everything outside the box is dimmed by one enormous shadow rather than by four
+     panels: one element to move, and no seams where four of them would meet. */
+  box-shadow: 0 0 0 100vmax rgba(10, 2, 4, .55);
+}
+.crop-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--signal);
+  border: 2px solid var(--ground);
+  border-radius: 50%;
+}
+.crop-handle[data-corner="nw"] { left: -8px; top: -8px; cursor: nwse-resize; }
+.crop-handle[data-corner="ne"] { right: -8px; top: -8px; cursor: nesw-resize; }
+.crop-handle[data-corner="sw"] { left: -8px; bottom: -8px; cursor: nesw-resize; }
+.crop-handle[data-corner="se"] { right: -8px; bottom: -8px; cursor: nwse-resize; }
+
+.crop-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.crop-readout {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
 /*
  * Long values (a local file path, a proxy URL, an address) are `overflow-wrap:
  * anywhere`, which drops the grid track's automatic *minimum* to zero. In a
