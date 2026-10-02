@@ -571,19 +571,30 @@ The surfaces are three heights of one red — `--ground: #4A0A10`, `--plate: #7E
 have been the obvious way to write `--wash` and it is wrong for the same reason as the text: white
 over red is pink, and a pink "pressed row" is a colour the palette does not otherwise have.
 
-**The window carries artwork.** `web/asset/lowpoly.webp` — a 1920×1080 low-poly volcanic scene, mean
-luminance 46 of 255 — is the `body` background, `fixed` and `cover`, under a single `--scrim`
-(`rgba(46, 7, 12, 0.5)`). One wash over the window rather than one per card: the cards already carry
-`--plate`, and stacking a second wash on them makes the board look dirty. The scrim exists because
-the artwork's own contrast is enough to break a paragraph of `--fg-soft` over its lightest facets;
-at 0.62 it was so heavy the image read as a red haze, which is the same as not having one.
+**The window carries artwork.** `web/asset/lowpoly.webp` — a 1920×1080 low-poly field in **neutral
+grey**, facets from 28 to 122 of 255 — is the `body` background, `fixed` and `cover`, under a single
+`--scrim` (`rgba(46, 7, 12, 0.62)`). One wash over the window rather than one per card: the cards
+already carry `--plate`, and stacking a second wash on them makes the board look dirty. The scrim
+exists because the artwork's own contrast is enough to break a paragraph of `--fg-soft` over its
+lightest facets.
 
-The source PNG (216 KB) is kept as the master in `artwork/` beside the crate — **not** in `web/asset/`,
-which is exactly the set of files the browser can ask for and which are all `include_bytes!`-ed into the
-binary. A file nobody requests in that directory is a served path and download weight for nothing, which
-is the rule `verify.ps1` now enforces by name. It is worth knowing why the WebP is **16.8 KB**: the PNG's
-alpha channel is 255 in every single pixel, so a quarter of its size was spending itself on a channel
-nothing reads.
+The wash is also what makes a **neutral** cut usable at all, and that is the trade this asset makes: a
+grey field has no hue of its own, so the oxblood wash is what turns it into this board — the tint and
+the darkness are one decision made in one place instead of two baked into a file. Its weight follows
+the artwork rather than a taste. The red scene this replaced ran 27–48 of 255 (mean 38) and took 0.5;
+the neutral cut is twice as bright (mean 77), and at 0.5 its lightest facets came out *above*
+`--plate` — the board brighter than the cards, which is the elevation backwards. At 0.62 the worst case
+over the lightest facet is `--fg` 10.4:1, `--fg-soft` 7.3:1, `--fg-dim` 4.7:1, and the facet stays
+under the cards.
+
+Both masters are in `artwork/`: `lowpoly.png`, which the first WebP was cut from, and
+`lowpoly-neutral.png`, which replaced it. Neither is in `web/asset/`, which is exactly the set of files
+the browser can ask for and which are all `include_bytes!`-ed into the binary. A file nobody requests in
+that directory is a served path and download weight for nothing, which is the rule `verify.ps1` enforces
+by name — it caught the neutral master sitting there while its WebP was being cut. It is worth knowing
+why the WebP is **13.0 KB** for a 1920×1080 image: the cut is flat facets, a shape WebP is very good at,
+and the PNG it came from carries an alpha channel that is 255 in every single pixel — a quarter of that
+file was spending itself on a channel nothing reads, and the conversion drops it.
 
 **The fire palette stopped being an accent set.** The five steps are still stored as *roles* rather
 than as swatches — `--signal` (`#FF5A33`) is the one accent, `--signal-hot` (`#FF7452`) and
@@ -750,8 +761,9 @@ web/
   asset/              exactly what ships: lowpoly.webp (the window background), the game banner and
                       the twelve help screenshots. Every file here is embedded in the binary and
                       requestable by the browser — `artwork/` holds what is neither
-artwork/              the masters and the cuts nobody requests: lowpoly.png, the 864×864 key art,
-                      and the 640×360 hero thumbnail. Kept in the repository, out of the served tree
+artwork/              the masters and the cuts nobody requests: lowpoly.png and lowpoly-neutral.png
+                      (the two window backgrounds, red and neutral), the 864×864 key art, and the
+                      640×360 hero thumbnail. Kept in the repository, out of the served tree
                       and out of the binary. (The other masters — six PNGs of 1.5 / 0.6 / 15.6 / 1.9 /
                       1.1 / 1.0 MB plus the 7-page `常见问题.pdf` the six error screenshots came
                       from — are deliberately not in the repository at all: they can be taken again.)

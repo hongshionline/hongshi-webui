@@ -119,9 +119,19 @@
   /* The wash over the window artwork. Translucent enough that the low-poly facets
    * read through it as texture, heavy enough that `--fg-soft` prose holds over the
    * lightest of them — see the note on `body` below for why this is one wash and not
-   * one per card. Tuned down from 0.62 after looking at it: at that weight the
-   * artwork was only visible as a red haze, which is the same as not having one. */
-  --scrim: rgba(46, 7, 12, 0.5);
+   * one per card.
+   *
+   * The weight follows the artwork rather than a taste, and it is also what gives a
+   * *neutral* cut a place in this palette: the field has no hue of its own, so the
+   * oxblood wash is what turns it into the board. The two cuts differ by a factor of
+   * two in brightness — the red scene ran 27–48 of 255 (mean 38) and took 0.5; the
+   * neutral one runs 28–122 (mean 77). At 0.5 over the neutral cut its lightest
+   * facets came out brighter than `--plate`, which is the elevation backwards, so it
+   * is 0.62. Measured over that cut, worst case: `--fg` 10.4:1 · `--fg-soft` 7.3:1 ·
+   * `--fg-dim` 4.7:1, with the lightest facet still under the cards. Any background
+   * the *user* supplies has to be measured against this too — see the personalization
+   * note in the README. */
+  --scrim: rgba(46, 7, 12, 0.62);
 
   /* Heat: the one ramp, and the only place these five run in order. The bottom
    * step is a plate tint rather than a grey, because there is no grey any more. */
@@ -199,17 +209,20 @@ html { -webkit-text-size-adjust: 100%; }
 
 /* The artwork on the window itself, not on a card.
  *
- * `web/asset/lowpoly.webp` is a 1920×1080 low-poly volcanic scene — already dark
- * (mean luminance 46 of 255) and already in this palette's red, which is why it
- * works as a board rather than as a picture: it reads as texture under the content
- * instead of competing with it.
+ * `web/asset/lowpoly.webp` is a 1920×1080 low-poly field in **neutral grey** — facets
+ * from 28 to 122 of 255, no hue of its own. It works as a board rather than as a
+ * picture, and the scrim above is what does it: the wash darkens the field *and*
+ * gives it the palette's oxblood, so what reaches the eye is this board's colour with
+ * the facets still in it as texture. A neutral cut under a heavy wash is a better
+ * background than a pre-tinted one, because the tint and the darkness are one
+ * decision made in one place instead of two baked into a file.
  *
- * The scrim is the part that matters. It is `--scrim`, a translucent wash of the
- * ground, laid over the image so the darkest and lightest facets are pulled toward
- * one value — the image alone has enough contrast left in it to break a paragraph of
- * `--fg-soft`, and the scrim is what buys that back without flattening the artwork to
- * a solid. Adding a *second* scrim per-card was the alternative and it is worse: the
- * cards already carry `--plate`, and stacking two washes makes the board look dirty.
+ * The scrim is also the part that matters for legibility. It is `--scrim`, laid over
+ * the image so the darkest and lightest facets are pulled toward one value — the
+ * image alone has enough contrast left in it to break a paragraph of `--fg-soft`, and
+ * the scrim is what buys that back without flattening the artwork to a solid. Adding a
+ * *second* scrim per-card was the alternative and it is worse: the cards already carry
+ * `--plate`, and stacking two washes makes the board look dirty.
  *
  * `fixed` is deliberate: it costs nothing here (there are no inner scroll
  * containers on the board, so the background is never composited mid-scroll) and it
@@ -219,9 +232,10 @@ body {
   background-color: var(--ground);
   background-image: linear-gradient(var(--scrim), var(--scrim)),
     url("asset/lowpoly.webp");
-  /* A little above centre: the scene's interest (the ridge and the ridge-line of
-     cones) sits in the upper half, and `cover` on a window shorter than 1080px crops
-     symmetrically — centred, the top half of a 16:9 image is the half that goes. */
+  /* A little above centre: this field is darkest in the upper left and lightest on
+     the right, and `cover` on a window shorter than 1080px crops symmetrically —
+     centred, the crop keeps the bright end and drops the dark one, which is the half
+     the top bar and the first heading want under them. */
   background-position: center 38%;
   background-size: cover;
   background-repeat: no-repeat;
