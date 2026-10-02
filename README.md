@@ -1,4 +1,4 @@
-# hongshi shell (`hongshi`)
+﻿# hongshi shell (`hongshi`)
 
 The official WebUI shell for the hongshi kernel: **a local server plus your own browser.**
 
@@ -358,7 +358,7 @@ link. The check asks `GET /api/webui/version` and has three answers, not two —
 **无法检查**. A `404` is the third: it means the site has published no version, and reporting that as
 "已是最新" would be a claim nobody made.
 
-The running build is **测试版 v0.5.0**. The channel is one constant (`crate::CHANNEL`) because
+The running build is **测试版 v0.6.0**. The channel is one constant (`crate::CHANNEL`) because
 `--version`, the About panel and the site's endpoint are three places a user can compare, and two of
 them disagreeing is worse than either being wrong.
 
@@ -556,7 +556,7 @@ checked the same way the others are: magic `CF FA ED FE`, then the CPU type (`0x
 `0x0100000C` for arm64). A fat/universal binary is deliberately rejected — each download-page row is
 one file for one architecture.
 
-Current artifacts for **测试版 v0.5.0**:
+Current artifacts for **测试版 v0.6.0**:
 
 | Artifact | Size | Format |
 |---|---|---|

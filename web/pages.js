@@ -1574,16 +1574,16 @@
         '<p class="section-note bg-hint" id="set-bgwhy"></p>' +
         "</div>" +
         '<div class="field-row">' +
-        '<div class="field"><div class="range-head"><label class="label" for="set-bgblur">模糊度</label>' +
-        '<span class="range-value" id="set-bgblur-value">0 px</span></div>' +
+        '<div class="field"><label class="label" for="set-bgblur">模糊度' +
+        '<span class="range-value" id="set-bgblur-value">0 px</span></label>' +
         '<input type="range" id="set-bgblur" min="0" max="40" step="1" value="0"></div>' +
-        '<div class="field"><div class="range-head"><label class="label" for="set-bgdark">背景变暗</label>' +
-        '<span class="range-value" id="set-bgdark-value">62%</span></div>' +
+        '<div class="field"><label class="label" for="set-bgdark">背景变暗' +
+        '<span class="range-value" id="set-bgdark-value">62%</span></label>' +
         '<input type="range" id="set-bgdark" min="0" max="100" step="1" value="62"></div>' +
         "</div>" +
         '<div class="field" id="set-bgcropfield" hidden>' +
-        '<div class="range-head"><label class="label" for="set-bgstage">裁剪区域</label>' +
-        '<span class="range-value" id="set-bgcrop-readout"></span></div>' +
+        '<label class="label" for="set-bgstage">裁剪区域' +
+        '<span class="range-value" id="set-bgcrop-readout"></span></label>' +
         '<div class="crop-stage" id="set-bgstage" role="application" ' +
         'aria-label="拖动方框选择要显示的画面，四角可以缩放">' +
         '<img class="crop-image" id="set-bgimage" alt="" draggable="false">' +
@@ -1625,13 +1625,13 @@
         '<p class="section-note bg-hint" id="set-theme-note"></p>' +
         "</div>" +
         '<div class="field">' +
-        '<div class="bg-label-row"><label class="label" for="set-accent">强调色</label>' +
-        '<button type="button" class="btn btn--ghost btn--small" id="set-accent-auto">' +
-        icon("refresh", "icon--sm") + "自动</button></div>" +
+        '<label class="label" for="set-accent">强调色</label>' +
         '<div class="theme-pick">' +
         '<input type="color" class="color-well" id="set-accent" value="#ff5a33" aria-label="强调色">' +
         '<input class="input input--mono theme-hex" id="set-accent-hex" type="text" autocomplete="off" ' +
-        'spellcheck="false" maxlength="7" placeholder="留空 = 由底色推导">' +
+        'spellcheck="false" maxlength="7" placeholder="#ff5a33">' +
+        '<button type="button" class="btn btn--ghost btn--small" id="set-accent-auto">' +
+        icon("refresh", "icon--sm") + "自动</button>" +
         "</div>" +
         '<div class="theme-swatches" id="set-theme-swatches" aria-hidden="true"></div>' +
         "</div>" +
@@ -1977,7 +1977,7 @@
         S.applyTheme({});
         setPill(themePill, "down", "内置配色");
         themeNote.innerHTML = "正在使用内置配色。选一个颜色，整套界面——底色、卡片、边框、" +
-          "四级文字、强调色——都由它推导出来。";
+          "四级文字、强调色——都由它推导出来；强调色留空就是自动推导。";
         themeSwatches.innerHTML = "";
         if (dirty !== false) markDirty();
         return;
@@ -1998,8 +1998,8 @@
       var fit = S.themeFit(typed);
       themeNote.innerHTML = fit && fit.clamped
         ? "这个颜色对底色来说太亮了：亮度已经压到能保住正文对比度的范围（色相和饱和度仍然是你的），" +
-          "上面的色块就是实际会用的颜色。"
-        : "整套界面由这一个颜色推导，文字对比度按内置配色的标准保持。";
+          "上面的色块就是实际会用的颜色。强调色留空就是自动推导。"
+        : "整套界面由这一个颜色推导，文字对比度按内置配色的标准保持；强调色留空就是自动推导。";
 
       var palette = S.theme.palette || {};
       var order = ["--ground", "--wash", "--plate", "--rule", "--fg-soft", "--fg", "--signal"];

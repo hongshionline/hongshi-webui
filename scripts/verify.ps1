@@ -953,6 +953,10 @@ else {
 # therefore has to be taken off again in `destroy`.
 $appText = [IO.File]::ReadAllText($appJs)
 $pagesText = [IO.File]::ReadAllText($pagesJs)
+# The two stylesheets, read once here and used by every check that has an opinion about
+# a rule rather than about behaviour.
+$mainCssText = [IO.File]::ReadAllText((Join-Path $webDir 'main.css'))
+$appCssText = [IO.File]::ReadAllText((Join-Path $webDir 'app.css'))
 
 $adds = ([regex]::Matches($pagesText, 'el\.addEventListener\(')).Count
 $removes = ([regex]::Matches($pagesText, 'el\.removeEventListener\(')).Count
@@ -1070,6 +1074,26 @@ Assert-That 'the theme travels on the wire like every other setting' `
 # token instead of hardcoding white.
 Assert-That 'text on the accent asks the token' `
     ([IO.File]::ReadAllText((Join-Path $webDir 'app.css')) -match 'color: var\(--on-signal\)')
+
+# ---------------------------------------------------------------------------
+# The personalization form's layout, from the source side.
+#
+# Two sliders sit side by side in a `.field-row`, and a value pushed to the far end of
+# its column ends a gap away from the *next* column's label - so `0 px 背景变暗` reads as
+# one label with the number belonging to the wrong words. The value lives inside its own
+# label now, which is width-independent: it cannot reach the next column at any size.
+#
+# The other half is that an input has to be wide enough for its own placeholder. That is
+# not style, it is content: `留空 = 由底色推导` in a 12ch box rendered as `留空 = 由`, and
+# a hex hint in the same box rendered as `#4a0a1` - both measured in the browser, where
+# the first one was found.
+Assert-That 'a slider value sits inside its own label' `
+    (($pagesText -match 'for="set-bgblur">[\s\S]{0,120}?id="set-bgblur-value">[\s\S]{0,40}?</label>') -and
+     ($pagesText -match 'for="set-bgdark">[\s\S]{0,120}?id="set-bgdark-value">[\s\S]{0,40}?</label>'))
+Assert-That 'the value is not pushed to the far end of a two-column row' `
+    ($appCssText -notmatch 'range-head')
+Assert-That 'the colour fields are wide enough for their placeholders' `
+    ($appCssText -match '\.theme-hex \{[\s\S]{0,120}?width: 14ch')
 
 # 房间开着的那一段时间是唯一能问「朋友怎么进来」的时刻，所以那两个入口就长在地址下面。
 # 引导只出现一次，帮助页得从这个位置进得去。

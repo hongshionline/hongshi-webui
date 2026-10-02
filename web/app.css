@@ -1,4 +1,4 @@
-﻿/*
+/*
  * hongshi shell — page components.
  *
  * Split from main.css only by subject, not by rule: the tokens, the three greys,
@@ -1582,15 +1582,18 @@ html.has-dialog body {
 /* The one sentence that explains why dropping a file only fills in its name. */
 .bg-hint { margin: 8px 0 0; }
 
-/* A slider's number lives in its label: a value that is only implied by where the
-   thumb sits is a value nobody can read back. */
-.range-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
+/*
+ * A slider's number lives *inside* its label, right after the words.
+ *
+ * It used to be pushed to the far end of the field with `space-between`, which reads
+ * well for one slider across a wide row and badly for two side by side: `0 px` ended a
+ * gap away from `背景变暗`, so the pair read as one label — `0 px 背景变暗` — with the
+ * numbers belonging to the wrong words. Inline, the value cannot reach the next column
+ * at any width, and it is still in the label, so clicking the number focuses the
+ * control it belongs to.
+ */
 .range-value {
+  margin-left: 8px;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-dim);
@@ -1688,8 +1691,13 @@ input[type="range"] {
 .color-well::-webkit-color-swatch-wrapper { padding: 0; }
 .color-well::-webkit-color-swatch { border: none; border-radius: 8px; }
 .color-well::-moz-color-swatch { border: none; border-radius: 8px; }
+/* The buttons in a colour row keep their own width for the same reason as the browse
+   button: squeezed by a growing field they wrap their own label onto two lines. */
+.theme-pick .btn { flex: 0 0 auto; white-space: nowrap; }
+/* Wide enough for its own placeholder, measured rather than guessed: at 12ch the
+   `#4a0a10` hint came out two pixels short and was clipped to `#4a0a1`. */
 .theme-hex {
-  width: 12ch;
+  width: 14ch;
   flex: 0 0 auto;
   text-transform: lowercase;
 }
